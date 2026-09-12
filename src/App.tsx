@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { getSql, detectSchema, loadDictionaries, fetchChatRooms, parseLineTimestamp, formatDateHeader, formatDate, formatTime, parseLineTextFile } from './utils/lineParser';
 import { ChatRoom, Message, ParsedFileContext } from './types';
-import JSZip from 'jszip';
 
 export default function App() {
   const [fileMap, setFileMap] = useState<Record<string, ParsedFileContext>>({});
@@ -13,22 +12,8 @@ export default function App() {
   
   // UI状態
   const [progress, setProgress] = useState<{ show: boolean; title: string; percent: number }>({ show: false, title: '', percent: 0 });
-  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
-  const [mosaicMsgIds, setMosaicMsgIds] = useState<Set<number>>(new Set());
-  const [hiddenMsgIds, setHiddenMsgIds] = useState<Set<number>>(new Set());
-  const [msgSearch, setMsgSearch] = useState<string>('');
-  const [showPrintModal, setShowPrintModal] = useState<boolean>(false);
 
-  // 印刷オプション
-  const [printScopeSelected, setPrintScopeSelected] = useState<boolean>(false);
-  const [printTextMode, setPrintTextMode] = useState<boolean>(false);
-  const [printHeader, setPrintHeader] = useState<boolean>(true);
-  const [printTime, setPrintTime] = useState<boolean>(true);
-  const [printSender, setPrintSender] = useState<boolean>(true);
-  const [printHideMasked, setPrintHideMasked] = useState<boolean>(true);
-  const [printBg, setPrintBg] = useState<boolean>(true);
-
-  // ファイル読み込みハンドラー
+  // ファイル/フォルダー読み込みハンドラー
   const handleFileUpload = async (files: FileList | File[]) => {
     const fileList = Array.from(files);
     if (fileList.length === 0) return;
@@ -43,6 +28,12 @@ export default function App() {
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
       const fname = file.name.toLowerCase();
+
+      // 隠しファイルや無関係な拡張子をスキップ
+      if (fname.startsWith('.') || fname.endsWith('.png') || fname.endsWith('.jpg') || fname.endsWith('.json')) {
+        continue;
+      }
+
       counter++;
       const fileId = `file_${counter}`;
 
@@ -52,7 +43,8 @@ export default function App() {
           newFileMap[fileId] = res.context;
           newRooms.push(res.room);
         }
-      } else if (fname.endsWith('.sqlite') || fname.endsWith('.db') || fname.endsWith('.sqlite3') || fname.includes('line')) {
+      } else {
+        // SQLite データベースとして解析を試行
         try {
           const buf = await file.arrayBuffer();
           const db = new SQL.Database(new Uint8Array(buf));
@@ -65,7 +57,7 @@ export default function App() {
           }
           db.close();
         } catch (e) {
-          console.error(e);
+          // SQLiteとして読み込めないファイルは無視
         }
       }
       setProgress({ show: true, title: '解析中...', percent: Math.round(((i + 1) / fileList.length) * 100) });
@@ -79,9 +71,6 @@ export default function App() {
   // トーク部屋選択時のメッセージ読み込み
   const selectChatRoom = async (room: ChatRoom) => {
     setActiveChat(room);
-    setSelectedMsgIds(new Set());
-    setMosaicMsgIds(new Set());
-    setHiddenMsgIds(new Set());
 
     const fileCtx = fileMap[room.fileId];
     if (!fileCtx) return;
@@ -186,7 +175,7 @@ export default function App() {
         )}
       </header>
 
-      {/* ドラッグ＆ドロップ（未読み込み時） */}
+      {/* ドラッグ＆ドロップ / ボタンエリア */}
       {Object.keys(fileMap).length === 0 ? (
         <div 
           onDragOver={e => e.preventDefault()} 
@@ -194,11 +183,40 @@ export default function App() {
           style={{ flex: 1, border: '3px dashed #06c755', margin: '20px', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' }}
         >
           <h2>ファイルまたはフォルダーをドロップ</h2>
-          <p style={{ color: '#666', marginTop: '8px' }}>Line.sqlite や .txt バックアップをドロップまたは選択してください</p>
-          <label style={{ background: '#06c755', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', marginTop: '16px', fontWeight: 'bold' }}>
-            ファイルを選択
-            <input type="file" multiple accept=".sqlite,.db,.sqlite3,.zip,.txt" onChange={e => e.target.files && handleFileUpload(e.target.files)} style={{ display: 'none' }} />
-          </label>
+          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルを直接またはフォルダーごと読み込めます</p>
+
+          {progress.show && (
+            <div style={{ margin: '16px 0', fontWeight: 'bold', color: '#06c755' }}>
+              {progress.title} ({progress.percent}%)
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
+            {/* 1. ファイル単位で選択 */}
+            <label style={{ background: '#06c755', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+              📄 ファイルを選択
+              <input 
+                type="file" 
+                multiple 
+                onClick={e => ((e.target as HTMLInputElement).value = '')}
+                onChange={e => e.target.files && handleFileUpload(e.target.files)} 
+                style={{ display: 'none' }} 
+              />
+            </label>
+
+            {/* 2. フォルダー単位で選択 */}
+            <label style={{ background: '#0084ff', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+              📁 フォルダーを選択
+              <input 
+                type="file" 
+                {...({ webkitdirectory: '', directory: '' } as any)} 
+                multiple 
+                onClick={e => ((e.target as HTMLInputElement).value = '')}
+                onChange={e => e.target.files && handleFileUpload(e.target.files)} 
+                style={{ display: 'none' }} 
+              />
+            </label>
+          </div>
         </div>
       ) : (
         /* メインアプリ表示 */
