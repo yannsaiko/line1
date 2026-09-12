@@ -18,54 +18,78 @@ export default function App() {
     const fileList = Array.from(files);
     if (fileList.length === 0) return;
 
-    setProgress({ show: true, title: 'ファイルを解析中...', percent: 10 });
-    const SQL = await getSql();
+    setProgress({ show: true, title: 'データベースエンジン (sql.js) を準備中...', percent: 10 });
 
-    const newFileMap: Record<string, ParsedFileContext> = { ...fileMap };
-    const newRooms: ChatRoom[] = [...chatRooms];
-    let counter = Object.keys(newFileMap).length;
+    try {
+      // WASMの取得失敗を検知
+      const SQL = await getSql().catch(err => {
+        console.error(err);
+        throw new Error('WebAssembly (sql.js) の読み込みに失敗しました。インターネット接続を確認してください。');
+      });
 
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      const fname = file.name.toLowerCase();
+      const newFileMap: Record<string, ParsedFileContext> = { ...fileMap };
+      const newRooms: ChatRoom[] = [...chatRooms];
+      let counter = Object.keys(newFileMap).length;
 
-      // 隠しファイルや無関係な拡張子をスキップ
-      if (fname.startsWith('.') || fname.endsWith('.png') || fname.endsWith('.jpg') || fname.endsWith('.json')) {
-        continue;
-      }
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const fname = file.name.toLowerCase();
 
-      counter++;
-      const fileId = `file_${counter}`;
-
-      if (fname.endsWith('.txt')) {
-        const res = await parseLineTextFile(file, file.name, fileId);
-        if (res) {
-          newFileMap[fileId] = res.context;
-          newRooms.push(res.room);
+        // 不要なファイル（画像やシステムファイル）はスキップ
+        if (
+          fname.startsWith('.') || 
+          fname.endsWith('.png') || fname.endsWith('.jpg') || fname.endsWith('.jpeg') || 
+          fname.endsWith('.gif') || fname.endsWith('.json') || fname.endsWith('.plist')
+        ) {
+          continue;
         }
-      } else {
-        // SQLite データベースとして解析を試行
-        try {
-          const buf = await file.arrayBuffer();
-          const db = new SQL.Database(new Uint8Array(buf));
-          const schema = detectSchema(db);
-          if (schema.msgTable) {
-            const { userMap, chatMap } = loadDictionaries(db, schema);
-            newFileMap[fileId] = { file, displayLabel: file.name, isText: false, schema, userMap, chatMap };
-            const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, file.name);
-            newRooms.push(...rooms);
+
+        const currentPercent = Math.round(10 + ((i + 1) / fileList.length) * 85);
+        setProgress({ show: true, title: `解析中 (${i + 1}/${fileList.length}): ${file.name}`, percent: currentPercent });
+
+        // 💡 ブラウザ画面をフリーズさせずプログレスバーを更新するための待機処理
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        counter++;
+        const fileId = `file_${counter}`;
+
+        if (fname.endsWith('.txt')) {
+          const res = await parseLineTextFile(file, file.name, fileId);
+          if (res) {
+            newFileMap[fileId] = res.context;
+            newRooms.push(res.room);
           }
-          db.close();
-        } catch (e) {
-          // SQLiteとして読み込めないファイルは無視
+        } else {
+          // SQLite データベースとして解析を試行
+          try {
+            const buf = await file.arrayBuffer();
+            const db = new SQL.Database(new Uint8Array(buf));
+            const schema = detectSchema(db);
+            if (schema && schema.msgTable) {
+              const { userMap, chatMap } = loadDictionaries(db, schema);
+              newFileMap[fileId] = { file, displayLabel: file.name, isText: false, schema, userMap, chatMap };
+              const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, file.name);
+              newRooms.push(...rooms);
+            }
+            db.close();
+          } catch (e) {
+            console.warn(`[Skip] SQLite解析不可: ${file.name}`, e);
+          }
         }
       }
-      setProgress({ show: true, title: '解析中...', percent: Math.round(((i + 1) / fileList.length) * 100) });
-    }
 
-    setFileMap(newFileMap);
-    setChatRooms(newRooms);
-    setProgress({ show: false, title: '', percent: 0 });
+      setFileMap(newFileMap);
+      setChatRooms(newRooms);
+
+      if (newRooms.length === 0) {
+        alert('解析可能な LINE データベース (`Line.sqlite`) や `.txt` トーク履歴が見つかりませんでした。');
+      }
+    } catch (err: any) {
+      alert(err.message || '解析中にエラーが発生しました。');
+    } finally {
+      // 成功・失敗にかかわらず確実にプログレス表示を終了
+      setProgress({ show: false, title: '', percent: 0 });
+    }
   };
 
   // トーク部屋選択時のメッセージ読み込み
@@ -80,8 +104,8 @@ export default function App() {
       return;
     }
 
-    const SQL = await getSql();
     try {
+      const SQL = await getSql();
       const buf = await fileCtx.file.arrayBuffer();
       const db = new SQL.Database(new Uint8Array(buf));
       const sch = fileCtx.schema;
@@ -186,13 +210,13 @@ export default function App() {
           <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルを直接またはフォルダーごと読み込めます</p>
 
           {progress.show && (
-            <div style={{ margin: '16px 0', fontWeight: 'bold', color: '#06c755' }}>
-              {progress.title} ({progress.percent}%)
+            <div style={{ margin: '16px 0', padding: '12px 24px', background: '#e8f8ee', borderRadius: '8px', border: '1px solid #06c755', textAlign: 'center' }}>
+              <div style={{ fontWeight: 'bold', color: '#06c755', marginBottom: '6px' }}>{progress.title}</div>
+              <div style={{ fontSize: '14px', color: '#333' }}>{progress.percent}%</div>
             </div>
           )}
 
           <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-            {/* 1. ファイル単位で選択 */}
             <label style={{ background: '#06c755', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
               📄 ファイルを選択
               <input 
@@ -204,7 +228,6 @@ export default function App() {
               />
             </label>
 
-            {/* 2. フォルダー単位で選択 */}
             <label style={{ background: '#0084ff', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
               📁 フォルダーを選択
               <input 
