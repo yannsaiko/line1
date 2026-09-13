@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node -e \"require('fs').mkdirSync('public', {recursive: true}); require('fs').copyFileSync('node_modules/sql.js/dist/sql-wasm.wasm', 'public/sql-wasm.wasm')\"",
     "dev": "vite",
+    "prebuild": "node -e \"require('fs').mkdirSync('public', {recursive: true}); require('fs').copyFileSync('node_modules/sql.js/dist/sql-wasm.wasm', 'public/sql-wasm.wasm')\"",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
