@@ -5,7 +5,7 @@ import { ChatRoom, Message, ParsedFileContext } from './types';
 export default function App() {
   const [fileMap, setFileMap] = useState<Record<string, ParsedFileContext>>({});
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [selectedFileFilter, setSelectedFileFilter] = useState<string>('ALL');
+  const [selectedFileFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeChat, setActiveChat] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -133,7 +133,7 @@ export default function App() {
 
         let isMe = false;
         if (isMeVal !== null && isMeVal !== undefined) {
-          isMe = (Number(isMeVal) === 1 || isMeVal === true || String(isMeVal) === '1');
+          isMe = (Number(isMeVal) === 1 || String(isMeVal) === '1');
         } else {
           isMe = (!senderId || senderId === '0' || senderId === '' || senderId === 'null');
         }
@@ -214,7 +214,6 @@ export default function App() {
           )}
 
           <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-            {/* 1. 単体・複数ファイル選択 */}
             <label style={{ background: '#06c755', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
               📄 ファイルを選択
               <input 
@@ -226,7 +225,6 @@ export default function App() {
               />
             </label>
 
-            {/* 2. フォルダーごと選択 */}
             <label style={{ background: '#0084ff', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
               📁 フォルダーを選択
               <input 
