@@ -1,130 +1,99 @@
-import React, { useState, useEffect } from 'react';
-import { getSql, detectSchema, loadDictionaries, fetchChatRooms, parseLineTimestamp, formatDateHeader, formatDate, formatTime } from './utils/lineParser';
+import React, { useState } from 'react';
+import { getSql, detectSchema, loadDictionaries, fetchChatRooms, parseLineTimestamp, formatDateHeader, formatDate, formatTime, parseLineTextFile } from './utils/lineParser';
 import { ChatRoom, Message, ParsedFileContext } from './types';
 
 export default function App() {
   const [fileMap, setFileMap] = useState<Record<string, ParsedFileContext>>({});
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
+  const [selectedFileFilter, setSelectedFileFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeChat, setActiveChat] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   
   // UI状態
-  const [loading, setLoading] = useState<boolean>(true);
-  const [loadingStatus, setLoadingStatus] = useState<string>('GitHubからデータを読み込み中...');
+  const [progress, setProgress] = useState<{ show: boolean; title: string; percent: number }>({ show: false, title: '', percent: 0 });
 
-  // 起動時にリポジトリ内のデータを自動取得
-  useEffect(() => {
-    async function loadEmbeddedData() {
-      try {
-        setLoadingStatus('データベースエンジン (sql.js) を準備中...');
-        const SQL = await getSql();
+  // ファイル / フォルダーのアップロード処理
+  const handleFileUpload = async (files: FileList | File[]) => {
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
 
-        // 読み込むファイルパスのリスト（public/data/ 以下に置いたファイル）
-        // 必要に応じてファイル名を追加してください
-        const targetFiles = [
-          { path: './data/Line.sqlite', label: 'Line.sqlite' },
-          { path: './data/chat.txt', label: 'chat.txt' }
-        ];
+    setProgress({ show: true, title: 'データベースエンジン (sql.js) を準備中...', percent: 10 });
 
-        const newFileMap: Record<string, ParsedFileContext> = {};
-        const newRooms: ChatRoom[] = [];
-        let counter = 0;
+    try {
+      const SQL = await getSql().catch(err => {
+        console.error(err);
+        throw new Error('WebAssembly (sql.js) の読み込みに失敗しました。');
+      });
 
-        for (const target of targetFiles) {
-          try {
-            setLoadingStatus(`${target.label} をダウンロード中...`);
-            const response = await fetch(target.path);
-            if (!response.ok) continue; // ファイルが存在しない場合はスキップ
+      const newFileMap: Record<string, ParsedFileContext> = { ...fileMap };
+      const newRooms: ChatRoom[] = [...chatRooms];
+      let counter = Object.keys(newFileMap).length;
 
-            const blob = await response.blob();
-            const file = new File([blob], target.label);
-            counter++;
-            const fileId = `file_${counter}`;
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const fname = file.name.toLowerCase();
 
-            if (target.label.endsWith('.txt')) {
-              const text = await file.text();
-              // テキスト簡易パース
-              const lines = text.split(/\r?\n/);
-              let title = target.label.replace(/\.txt$/i, '');
-              const parsedMsgs: Message[] = [];
-              let currentDate = '';
-              let currentMsg: Message | null = null;
-
-              for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-                const dateMatch = line.match(/^(\d{4}[\/\.-]\d{1,2}[\/\.-]\d{1,2})/);
-                if (dateMatch && !line.includes('\t')) {
-                  currentDate = dateMatch[1];
-                  continue;
-                }
-                const msgMatch = line.match(/^((?:午前|午後|AM|PM\s*)?\d{1,2}:\d{2})\t([^\t]+)\t(.*)/i);
-                if (msgMatch) {
-                  if (currentMsg) parsedMsgs.push(currentMsg);
-                  const isMe = (msgMatch[2].trim() === '自分' || msgMatch[2].trim() === 'Me');
-                  currentMsg = {
-                    id: parsedMsgs.length,
-                    text: msgMatch[3],
-                    isMe,
-                    senderId: isMe ? 'me' : 'other',
-                    senderName: msgMatch[2].trim(),
-                    timeOnlyStr: msgMatch[1].trim(),
-                    dateStr: currentDate,
-                    fullDateTimeStr: currentDate ? `${currentDate} ${msgMatch[1].trim()}` : msgMatch[1].trim(),
-                    timestamp: Date.now()
-                  };
-                } else if (currentMsg) {
-                  currentMsg.text += '\n' + line;
-                }
-              }
-              if (currentMsg) parsedMsgs.push(currentMsg);
-
-              if (parsedMsgs.length > 0) {
-                newFileMap[fileId] = { file, displayLabel: target.label, isText: true, messages: parsedMsgs };
-                newRooms.push({
-                  fileId,
-                  displayLabel: target.label,
-                  id: fileId,
-                  name: title,
-                  count: parsedMsgs.length,
-                  lastTime: parsedMsgs[parsedMsgs.length - 1]?.fullDateTimeStr || '',
-                  isText: true
-                });
-              }
-            } else {
-              // SQLite
-              const buf = await file.arrayBuffer();
-              const db = new SQL.Database(new Uint8Array(buf));
-              const schema = detectSchema(db);
-              if (schema && schema.msgTable) {
-                const { userMap, chatMap } = loadDictionaries(db, schema);
-                newFileMap[fileId] = { file, displayLabel: target.label, isText: false, schema, userMap, chatMap };
-                const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, target.label);
-                newRooms.push(...rooms);
-              }
-              db.close();
-            }
-          } catch (err) {
-            console.warn(`[Skip] ${target.label} の読み込みに失敗しました`, err);
-          }
+        // 隠しファイルや無関係なメディアファイルをスキップ
+        if (
+          fname.startsWith('.') || 
+          fname.endsWith('.png') || fname.endsWith('.jpg') || fname.endsWith('.jpeg') || 
+          fname.endsWith('.gif') || fname.endsWith('.json') || fname.endsWith('.plist')
+        ) {
+          continue;
         }
 
-        setFileMap(newFileMap);
-        setChatRooms(newRooms);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    }
+        const currentPercent = Math.round(10 + ((i + 1) / fileList.length) * 85);
+        setProgress({ show: true, title: `解析中 (${i + 1}/${fileList.length}): ${file.name}`, percent: currentPercent });
 
-    loadEmbeddedData();
-  }, []);
+        // UI描画のフリーズを防ぐための割り込み待機
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        counter++;
+        const fileId = `file_${counter}`;
+
+        if (fname.endsWith('.txt')) {
+          const res = await parseLineTextFile(file, file.name, fileId);
+          if (res) {
+            newFileMap[fileId] = res.context;
+            newRooms.push(res.room);
+          }
+        } else {
+          // SQLite データベースとして解析を試行
+          try {
+            const buf = await file.arrayBuffer();
+            const db = new SQL.Database(new Uint8Array(buf));
+            const schema = detectSchema(db);
+            if (schema && schema.msgTable) {
+              const { userMap, chatMap } = loadDictionaries(db, schema);
+              newFileMap[fileId] = { file, displayLabel: file.name, isText: false, schema, userMap, chatMap };
+              const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, file.name);
+              newRooms.push(...rooms);
+            }
+            db.close();
+          } catch (e) {
+            // SQLiteとして読み込めないファイルはスキップ
+          }
+        }
+      }
+
+      setFileMap(newFileMap);
+      setChatRooms(newRooms);
+
+      if (newRooms.length === 0) {
+        alert('解析可能な LINE データベース (`Line.sqlite`) や `.txt` トーク履歴が見つかりませんでした。');
+      }
+    } catch (err: any) {
+      alert(err.message || '解析中にエラーが発生しました。');
+    } finally {
+      setProgress({ show: false, title: '', percent: 0 });
+    }
+  };
 
   // トーク部屋選択時のメッセージ読み込み
   const selectChatRoom = async (room: ChatRoom) => {
     setActiveChat(room);
+
     const fileCtx = fileMap[room.fileId];
     if (!fileCtx) return;
 
@@ -209,26 +178,70 @@ export default function App() {
     }
   };
 
-  const filteredRooms = chatRooms.filter(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredRooms = chatRooms.filter(r => {
+    const matchFile = selectedFileFilter === 'ALL' || r.fileId === selectedFileFilter;
+    const matchSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchFile && matchSearch;
+  });
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', background: '#f5f5f5' }}>
+      {/* ヘッダー */}
       <header style={{ background: '#06c755', color: '#fff', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ fontSize: '18px', margin: 0 }}>LINE トーク履歴ビューア (GitHub自動読込版)</h1>
+        <h1 style={{ fontSize: '18px', margin: 0 }}>LINE トーク履歴マルチビューア</h1>
+        {Object.keys(fileMap).length > 0 && (
+          <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer' }} onClick={() => window.location.reload()}>
+            リセット
+          </button>
+        )}
       </header>
 
-      {loading ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-          <div style={{ fontWeight: 'bold', color: '#06c755', fontSize: '16px' }}>{loadingStatus}</div>
-        </div>
-      ) : chatRooms.length === 0 ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff', padding: '20px', textAlign: 'center' }}>
-          <h3>リポジトリ内にLINEデータが見つかりませんでした</h3>
-          <p style={{ color: '#666', fontSize: '14px', marginTop: '8px' }}>
-            GitHubリポジトリの <b>`public/data/Line.sqlite`</b> にデータベースファイルを配置してください。
-          </p>
+      {/* ドラッグ＆ドロップ / ボタン選択エリア */}
+      {Object.keys(fileMap).length === 0 ? (
+        <div 
+          onDragOver={e => e.preventDefault()} 
+          onDrop={e => { e.preventDefault(); handleFileUpload(e.dataTransfer.files); }}
+          style={{ flex: 1, border: '3px dashed #06c755', margin: '20px', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' }}
+        >
+          <h2>ファイルまたはフォルダーをドロップ</h2>
+          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルを直接ドロップするか、ボタンから選択してください</p>
+
+          {progress.show && (
+            <div style={{ margin: '16px 0', padding: '12px 24px', background: '#e8f8ee', borderRadius: '8px', border: '1px solid #06c755', textAlign: 'center' }}>
+              <div style={{ fontWeight: 'bold', color: '#06c755', marginBottom: '6px' }}>{progress.title}</div>
+              <div style={{ fontSize: '14px', color: '#333' }}>{progress.percent}%</div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
+            {/* 1. 単体・複数ファイル選択 */}
+            <label style={{ background: '#06c755', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+              📄 ファイルを選択
+              <input 
+                type="file" 
+                multiple 
+                onClick={e => ((e.target as HTMLInputElement).value = '')}
+                onChange={e => e.target.files && handleFileUpload(e.target.files)} 
+                style={{ display: 'none' }} 
+              />
+            </label>
+
+            {/* 2. フォルダーごと選択 */}
+            <label style={{ background: '#0084ff', color: '#fff', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+              📁 フォルダーを選択
+              <input 
+                type="file" 
+                {...({ webkitdirectory: '', directory: '' } as any)} 
+                multiple 
+                onClick={e => ((e.target as HTMLInputElement).value = '')}
+                onChange={e => e.target.files && handleFileUpload(e.target.files)} 
+                style={{ display: 'none' }} 
+              />
+            </label>
+          </div>
         </div>
       ) : (
+        /* メインビューアー表示 */
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* サイドバー */}
           <div style={{ width: '320px', background: '#fff', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' }}>
