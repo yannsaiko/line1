@@ -1,17 +1,13 @@
 import initSqlJs, { SqlJsStatic } from 'sql.js';
-// Viteの機能を使ってwasmファイルのURLを取得
-import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
 export function getSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
-      // WASMファイルをプロジェクトのビルド成果物から直接取得するように指定
-      locateFile: () => sqlWasmUrl,
+      // CDN (cdnjs) から sql-wasm.wasm を確実に取得する
+      locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
     });
   }
   return sqlPromise;
 }
-
-// ... 以降のパース関数群は既存のコードのまま
