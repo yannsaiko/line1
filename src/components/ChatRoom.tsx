@@ -1,50 +1,66 @@
 import React from 'react';
-import { LineChat, LineMessage } from '../types/chat';
 import { formatMessageTime } from '../utils/dateFormatter';
 import { getPartnerUser, getRoomDisplayTitle, isSameUserId } from '../utils/chatHelper';
 
 interface ChatRoomProps {
-  room: LineChat;
-  currentUserId: string; // 自分の ZMID (例: "u12345678...")
+  room: any;
+  currentUserId: any;
 }
 
 export const ChatRoom: React.FC<ChatRoomProps> = ({ room, currentUserId }) => {
   const roomTitle = getRoomDisplayTitle(room, currentUserId);
   const partnerUser = getPartnerUser(room, currentUserId);
 
-  // 表示名：設定変更名(ZCUSTOMNAME)があれば最優先
-  const partnerDisplayName = partnerUser
-    ? partnerUser.ZCUSTOMNAME || partnerUser.ZNAME || 'トーク相手'
+  // 相手の表示名を取得
+  const partnerName = partnerUser 
+    ? (partnerUser.ZCUSTOMNAME || partnerUser.zcustomname || partnerUser.ZNAME || partnerUser.zname || partnerUser.name || partnerUser.displayName)
     : 'トーク相手';
 
-  const messages = room?.messages || [];
+  const messages: any[] = room?.messages || room?.messageList || [];
 
   return (
     <div className="chat-container">
-      {/* 部屋名（相手の名前） */}
+      {/* 部屋名 */}
       <header className="chat-header">
         <h2>{roomTitle}</h2>
       </header>
 
-      {/* メッセージ一覧 */}
+      {/* メッセージ表示 */}
       <div className="message-list">
-        {messages.map((message: LineMessage, index: number) => {
-          // 送信者ID判定（ZSENDER または ZSENDERHEADER）
-          const senderId = message.ZSENDER || message.ZSENDERHEADER;
+        {messages.map((message: any, index: number) => {
+          // 送信者ID（ZMID / senderId 等）
+          const senderId = 
+            message.ZSENDER || 
+            message.zsender || 
+            message.ZSENDERHEADER || 
+            message.zsenderheader || 
+            message.senderId || 
+            message.sender_id || 
+            message.userId;
+
           const isMyMessage = isSameUserId(senderId, currentUserId);
 
-          // ZCREATEDTIME (13桁ミリ秒) から時刻フォーマット
-          const formattedTime = formatMessageTime(message.ZCREATEDTIME);
+          // 送信時刻（ZCREATEDTIME / created_at 等）
+          const rawTime = 
+            message.ZCREATEDTIME ?? 
+            message.zcreatedtime ?? 
+            message.createdAt ?? 
+            message.created_at ?? 
+            message.timestamp ?? 
+            message.time;
+
+          const formattedTime = formatMessageTime(rawTime);
+          const messageText = message.ZTEXT || message.ztext || message.text || message.content || '';
 
           return (
             <div
-              key={message.Z_PK || index}
+              key={message.Z_PK || message.z_pk || message.id || index}
               className={`message-item ${isMyMessage ? 'my-message' : 'partner-message'}`}
             >
               {!isMyMessage && (
-                <span className="sender-name">{partnerDisplayName}</span>
+                <span className="sender-name">{partnerName}</span>
               )}
-              <div className="message-bubble">{message.ZTEXT || ''}</div>
+              <div className="message-bubble">{messageText}</div>
               <span className="message-time">{formattedTime}</span>
             </div>
           );
