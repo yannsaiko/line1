@@ -13,8 +13,13 @@ export interface LineMessage {
 }
 
 export interface LineChat {
-  ZMID: string;            // チャットルームID
+  ZMID?: string;           // チャットルームID
   ZNAME?: string;          // グループ名/部屋名
   members?: LineUser[];    // 参加ユーザー配列
   messages?: LineMessage[];
 }
+
+// 既存コードとの互換性のためのエイリアス（型エイリアス）
+export type User = LineUser;
+export type Message = LineMessage;
+export type Room = LineChat;
