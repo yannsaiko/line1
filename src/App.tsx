@@ -7,8 +7,10 @@ export default function App() {
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [selectedFileFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [msgSearchQuery, setMsgSearchQuery] = useState<string>('');
   const [activeChat, setActiveChat] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(null);
   
   // UI状態
   const [progress, setProgress] = useState<{ show: boolean; title: string; percent: number }>({ show: false, title: '', percent: 0 });
@@ -34,7 +36,6 @@ export default function App() {
         const file = fileList[i];
         const fname = file.name.toLowerCase();
 
-        // 隠しファイルや無関係なメディアファイルをスキップ
         if (
           fname.startsWith('.') || 
           fname.endsWith('.png') || fname.endsWith('.jpg') || fname.endsWith('.jpeg') || 
@@ -46,7 +47,6 @@ export default function App() {
         const currentPercent = Math.round(10 + ((i + 1) / fileList.length) * 85);
         setProgress({ show: true, title: `解析中 (${i + 1}/${fileList.length}): ${file.name}`, percent: currentPercent });
 
-        // UI描画のフリーズを防ぐための割り込み待機
         await new Promise(resolve => setTimeout(resolve, 10));
 
         counter++;
@@ -59,7 +59,6 @@ export default function App() {
             newRooms.push(res.room);
           }
         } else {
-          // SQLite データベースとして解析を試行
           try {
             const buf = await file.arrayBuffer();
             const db = new SQL.Database(new Uint8Array(buf));
@@ -72,7 +71,7 @@ export default function App() {
             }
             db.close();
           } catch (e) {
-            // SQLiteとして読み込めないファイルはスキップ
+            // スキップ
           }
         }
       }
@@ -93,6 +92,8 @@ export default function App() {
   // トーク部屋選択時のメッセージ読み込み
   const selectChatRoom = async (room: ChatRoom) => {
     setActiveChat(room);
+    setMsgSearchQuery('');
+    setHighlightedMsgId(null);
 
     const fileCtx = fileMap[room.fileId];
     if (!fileCtx) return;
@@ -148,11 +149,14 @@ export default function App() {
           else text = '[メッセージ (スタンプ/写真/システム)]';
         }
 
+        // 送信者名の補正
         let senderName = '相手';
         if (isMe) {
           senderName = '自分';
         } else if (fileCtx.userMap?.[senderId]) {
           senderName = fileCtx.userMap[senderId];
+        } else if (fileCtx.chatMap?.[room.id]) {
+          senderName = fileCtx.chatMap[room.id];
         } else if (room.name && !room.name.startsWith('トーク部屋')) {
           senderName = room.name;
         }
@@ -178,11 +182,27 @@ export default function App() {
     }
   };
 
+  // 該当のメッセージへスクロール＆ハイライト表示
+  const scrollToMessage = (msgId: number) => {
+    setHighlightedMsgId(msgId);
+    const element = document.getElementById(`msg-${msgId}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setTimeout(() => {
+      setHighlightedMsgId(prev => (prev === msgId ? null : prev));
+    }, 2500);
+  };
+
   const filteredRooms = chatRooms.filter(r => {
     const matchFile = selectedFileFilter === 'ALL' || r.fileId === selectedFileFilter;
     const matchSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchFile && matchSearch;
   });
+
+  const searchResults = msgSearchQuery.trim()
+    ? messages.filter(m => m.text.toLowerCase().includes(msgSearchQuery.toLowerCase()))
+    : [];
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', background: '#f5f5f5' }}>
@@ -196,7 +216,7 @@ export default function App() {
         )}
       </header>
 
-      {/* ドラッグ＆ドロップ / ボタン選択エリア */}
+      {/* ファイル選択画面 */}
       {Object.keys(fileMap).length === 0 ? (
         <div 
           onDragOver={e => e.preventDefault()} 
@@ -204,7 +224,7 @@ export default function App() {
           style={{ flex: 1, border: '3px dashed #06c755', margin: '20px', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' }}
         >
           <h2>ファイルまたはフォルダーをドロップ</h2>
-          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルを直接ドロップするか、ボタンから選択してください</p>
+          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルをドロップするか選択してください</p>
 
           {progress.show && (
             <div style={{ margin: '16px 0', padding: '12px 24px', background: '#e8f8ee', borderRadius: '8px', border: '1px solid #06c755', textAlign: 'center' }}>
@@ -239,14 +259,14 @@ export default function App() {
           </div>
         </div>
       ) : (
-        /* メインビューアー表示 */
+        /* ビューアー画面 */
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-          {/* サイドバー */}
+          {/* 左側：トーク部屋一覧 */}
           <div style={{ width: '320px', background: '#fff', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '10px', borderBottom: '1px solid #eee' }}>
               <input 
                 type="text" 
-                placeholder="トーク部屋を検索..." 
+                placeholder="トーク部屋名で絞り込み..." 
                 value={searchQuery} 
                 onChange={e => setSearchQuery(e.target.value)} 
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }}
@@ -274,15 +294,36 @@ export default function App() {
             </div>
           </div>
 
-          {/* メインコンテンツ */}
+          {/* 右側：トーク本文 */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#abc1ee' }}>
             {activeChat ? (
               <>
-                <div style={{ background: '#fff', padding: '10px 16px', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                {/* メインヘッダー＆トーク内検索 */}
+                <div style={{ background: '#fff', padding: '10px 16px', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '16px' }}>{activeChat.name}</h3>
                     <span style={{ fontSize: '11px', color: '#666' }}>{messages.length}件のメッセージ</span>
                   </div>
+
+                  {/* トーク本文検索フィルター */}
+                  <div style={{ flex: 1, maxWidth: '350px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="🔍 トーク内容を検索..." 
+                      value={msgSearchQuery} 
+                      onChange={e => setMsgSearchQuery(e.target.value)} 
+                      style={{ flex: 1, padding: '6px 12px', borderRadius: '16px', border: '1px solid #ccc', fontSize: '13px' }}
+                    />
+                    {msgSearchQuery && (
+                      <button 
+                        onClick={() => setMsgSearchQuery('')} 
+                        style={{ background: '#bbb', color: '#fff', border: 'none', borderRadius: '50%', width: '20px', height: '20px', cursor: 'pointer', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
                   <button 
                     onClick={() => window.print()} 
                     style={{ background: '#06c755', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
@@ -291,9 +332,47 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* 検索結果パネル（一致したキーワードがある場合表示） */}
+                {msgSearchQuery.trim() && (
+                  <div style={{ background: '#fff9c4', padding: '8px 16px', borderBottom: '1px solid #fbc02d', maxHeight: '140px', overflowY: 'auto', fontSize: '13px' }}>
+                    <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#574300' }}>
+                      検索結果: {searchResults.length}件 (クリックで該当メッセージへ移動)
+                    </div>
+                    {searchResults.length === 0 ? (
+                      <div style={{ color: '#888' }}>該当するメッセージが見つかりません</div>
+                    ) : (
+                      searchResults.map(m => (
+                        <div 
+                          key={`search_${m.id}`}
+                          onClick={() => scrollToMessage(m.id)}
+                          style={{
+                            padding: '4px 8px',
+                            margin: '2px 0',
+                            background: '#fff',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            border: '1px solid #ffe082',
+                            display: 'flex',
+                            justify: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginRight: '10px' }}>
+                            <strong>{m.senderName}:</strong> {m.text}
+                          </span>
+                          <span style={{ fontSize: '10px', color: '#888', flexShrink: 0 }}>{m.fullDateTimeStr}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* メッセージ表示エリア */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {messages.map((m, idx) => {
                     const showDate = idx === 0 || messages[idx - 1].dateStr !== m.dateStr;
+                    const isHighlighted = highlightedMsgId === m.id;
+
                     return (
                       <React.Fragment key={m.id}>
                         {showDate && (
@@ -301,19 +380,29 @@ export default function App() {
                             {m.dateStr}
                           </div>
                         )}
-                        <div style={{ alignSelf: m.isMe ? 'flex-end' : 'flex-start', maxWidth: '70%', display: 'flex', flexDirection: 'column' }}>
+                        <div 
+                          id={`msg-${m.id}`}
+                          style={{ 
+                            alignSelf: m.isMe ? 'flex-end' : 'flex-start', 
+                            maxWidth: '70%', 
+                            display: 'flex', 
+                            flexDirection: 'column',
+                            transition: 'all 0.3s ease'
+                          }}
+                        >
                           <span style={{ fontSize: '11px', color: '#444', marginBottom: '2px', textAlign: m.isMe ? 'right' : 'left' }}>
                             {m.senderName}
                           </span>
                           <div style={{
-                            background: m.isMe ? '#85e249' : '#fff',
+                            background: isHighlighted ? '#fff59d' : (m.isMe ? '#85e249' : '#fff'),
                             color: '#000',
                             padding: '8px 12px',
                             borderRadius: '14px',
                             fontSize: '14px',
-                            boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                            boxShadow: isHighlighted ? '0 0 10px #fbc02d' : '0 1px 2px rgba(0,0,0,0.1)',
                             whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word'
+                            wordBreak: 'break-word',
+                            outline: isHighlighted ? '2px solid #fbc02d' : 'none'
                           }}>
                             {m.text}
                           </div>
