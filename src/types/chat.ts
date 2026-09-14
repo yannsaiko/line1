@@ -1,25 +1,35 @@
+// LINE SQLite用データ型
 export interface LineUser {
-  ZMID: string;            // ユーザー固有ID
-  ZNAME?: string;          // 相手が設定した名前
-  ZCUSTOMNAME?: string;    // 自分が設定した変更名
+  ZMID?: string;
+  ZNAME?: string;
+  ZCUSTOMNAME?: string;
+  id?: string;
+  name?: string;
 }
 
 export interface LineMessage {
-  Z_PK?: number;           // メッセージ主キー
-  ZTEXT?: string;          // 本文
-  ZCREATEDTIME: number;    // 13桁ミリ秒タイムスタンプ
-  ZSENDER?: string;        // 送信者のZMID
-  ZSENDERHEADER?: string;  // 送信ヘッダー（フォールバック用）
+  Z_PK?: number;
+  ZTEXT?: string;
+  ZCREATEDTIME?: number;
+  ZSENDER?: string;
+  ZSENDERHEADER?: string;
+  id?: string;
+  text?: string;
+  createdAt?: string | number;
+  senderId?: string;
 }
 
 export interface LineChat {
-  ZMID?: string;           // チャットルームID
-  ZNAME?: string;          // グループ名/部屋名
-  members?: LineUser[];    // 参加ユーザー配列
+  ZMID?: string;
+  ZNAME?: string;
+  members?: LineUser[];
   messages?: LineMessage[];
+  id?: string;
+  title?: string;
+  type?: 'single' | 'group';
 }
 
-// 既存コードとの互換性のためのエイリアス（型エイリアス）
+// 互換性維持のためのエイリアス（User, Message, Room でのインポートを許可）
 export type User = LineUser;
 export type Message = LineMessage;
 export type Room = LineChat;
