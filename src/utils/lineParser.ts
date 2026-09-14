@@ -3,11 +3,11 @@ import { ChatRoom, ParsedFileContext, Message } from '../types';
 
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
-// WebAssembly (sql.js) の初期化
+// WebAssembly (sql.js) の初期化 (unpkg CDNを使用)
 export function getSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
-      locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+      locateFile: file => `https://unpkg.com/sql.js@1.8.0/dist/${file}`
     });
   }
   return sqlPromise;
