@@ -1,12 +1,11 @@
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
-// Viteの機能でWASMファイルをビルド成果物に直接同梱
 // @ts-ignore
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { ChatRoom, ParsedFileContext, Message } from '../types';
 
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
-// WebAssembly (sql.js) の初期化 (ローカルファイルから安全に読み込み)
+// WebAssembly (sql.js) の初期化
 export function getSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
@@ -66,8 +65,8 @@ export function detectSchema(db: Database): SchemaInfo {
   };
 }
 
-// 2. ユーザー名・トーク部屋名の辞書テーブル解析
-export function loadDictionaries(db: Database, schema: SchemaInfo): { userMap: Record<string, string>; chatMap: Record<string, string> } {
+// 2. ユーザー名・トーク部屋名の辞書テーブル解析（カスタム名・表示名の抽出強化）
+export function loadDictionaries(db: Database, _schema: SchemaInfo): { userMap: Record<string, string>; chatMap: Record<string, string> } {
   const userMap: Record<string, string> = {};
   const chatMap: Record<string, string> = {};
 
@@ -75,37 +74,56 @@ export function loadDictionaries(db: Database, schema: SchemaInfo): { userMap: R
     const tablesRes = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
     const tables = tablesRes.length > 0 ? tablesRes[0].values.map(r => String(r[0])) : [];
 
+    // ユーザーテーブル
     const userTable = tables.find(t => ['ZUSER', 'users', 'profiles', 'contacts', 'ZCONTACT'].includes(t)) || tables.find(t => /user|contact/i.test(t));
     if (userTable) {
-      const colsRes = db.exec(`PRAGMA table_info("${userTable}")`);
-      const cols = colsRes[0] ? colsRes[0].values.map(r => String(r[1])) : [];
-      const idCol = cols.find(c => ['Z_PK', 'id', 'user_id', 'mid', 'ZMID', 'ZUSERID'].includes(c));
-      const nameCol = cols.find(c => ['ZNAME', 'name', 'display_name', 'ZDISPLAYNAME', 'ZCUSTOMNAME'].includes(c));
+      const res = db.exec(`SELECT * FROM "${userTable}"`);
+      if (res[0] && res[0].columns) {
+        const cols = res[0].columns;
+        const pkIdx = cols.findIndex(c => ['Z_PK', 'id'].includes(c));
+        const midIdx = cols.findIndex(c => ['ZMID', 'mid', 'user_id', 'ZUSERID'].includes(c));
+        const customNameIdx = cols.indexOf('ZCUSTOMNAME');
+        const nameIdx = cols.indexOf('ZNAME');
+        const dispNameIdx = cols.indexOf('ZDISPLAYNAME');
 
-      if (idCol && nameCol) {
-        const res = db.exec(`SELECT "${idCol}", "${nameCol}" FROM "${userTable}"`);
-        if (res[0]) {
-          res[0].values.forEach(row => {
-            if (row[0] && row[1]) userMap[String(row[0])] = String(row[1]);
-          });
-        }
+        res[0].values.forEach(row => {
+          const pkVal = pkIdx !== -1 ? String(row[pkIdx] ?? '') : '';
+          const midVal = midIdx !== -1 ? String(row[midIdx] ?? '') : '';
+          
+          const name = String(
+            (customNameIdx !== -1 && row[customNameIdx] ? row[customNameIdx] : null) ||
+            (nameIdx !== -1 && row[nameIdx] ? row[nameIdx] : null) ||
+            (dispNameIdx !== -1 && row[dispNameIdx] ? row[dispNameIdx] : null) || ''
+          ).trim();
+
+          if (name) {
+            if (pkVal) userMap[pkVal] = name;
+            if (midVal) userMap[midVal] = name;
+          }
+        });
       }
     }
 
+    // トーク部屋テーブル
     const chatTable = tables.find(t => ['ZCHAT', 'chats', 'chat_rooms', 'rooms', 'ZCHATROOM'].includes(t)) || tables.find(t => /chat|room/i.test(t));
     if (chatTable) {
-      const colsRes = db.exec(`PRAGMA table_info("${chatTable}")`);
-      const cols = colsRes[0] ? colsRes[0].values.map(r => String(r[1])) : [];
-      const idCol = cols.find(c => ['Z_PK', 'id', 'chat_id', 'room_id', 'ZMID', 'ZCHATID'].includes(c));
-      const nameCol = cols.find(c => ['ZNAME', 'name', 'title', 'ZTITLE', 'ZCHATNAME'].includes(c));
+      const res = db.exec(`SELECT * FROM "${chatTable}"`);
+      if (res[0] && res[0].columns) {
+        const cols = res[0].columns;
+        const pkIdx = cols.findIndex(c => ['Z_PK', 'id'].includes(c));
+        const midIdx = cols.findIndex(c => ['ZMID', 'chat_id', 'room_id', 'ZCHATID'].includes(c));
+        const nameIdx = cols.findIndex(c => ['ZNAME', 'name', 'title', 'ZTITLE', 'ZCHATNAME'].includes(c));
 
-      if (idCol && nameCol) {
-        const res = db.exec(`SELECT "${idCol}", "${nameCol}" FROM "${chatTable}"`);
-        if (res[0]) {
-          res[0].values.forEach(row => {
-            if (row[0] && row[1]) chatMap[String(row[0])] = String(row[1]);
-          });
-        }
+        res[0].values.forEach(row => {
+          const pkVal = pkIdx !== -1 ? String(row[pkIdx] ?? '') : '';
+          const midVal = midIdx !== -1 ? String(row[midIdx] ?? '') : '';
+          const name = nameIdx !== -1 ? String(row[nameIdx] ?? '').trim() : '';
+
+          if (name) {
+            if (pkVal) chatMap[pkVal] = name;
+            if (midVal) chatMap[midVal] = name;
+          }
+        });
       }
     }
   } catch (e) {
@@ -161,27 +179,37 @@ export function fetchChatRooms(
   }
 }
 
-// 4. タイムスタンプ・日時フォーマット関連関数
+// 4. タイムスタンプ判定・変換（CoreData 秒/ミリ秒、Unix 秒/ミリ秒に対応）
 export function parseLineTimestamp(rawTime: any): Date | null {
   if (rawTime === null || rawTime === undefined) return null;
 
-  const num = Number(rawTime);
-  if (!isNaN(num) && num > 0) {
-    if (num < 1000000000) {
-      return new Date((num + 978307200) * 1000);
-    }
-    if (num < 10000000000) {
-      return new Date(num * 1000);
-    }
+  let num = Number(rawTime);
+  if (isNaN(num) || num <= 0) {
+    const parsedStr = Date.parse(String(rawTime));
+    return !isNaN(parsedStr) ? new Date(parsedStr) : null;
+  }
+
+  // 1. CoreData epoch 秒 (2001-01-01 基準)
+  if (num >= 100000000 && num < 1000000000) {
+    return new Date((num + 978307200) * 1000);
+  }
+
+  // 2. Unix epoch 秒 (1970-01-01 基準)
+  if (num >= 1000000000 && num < 2500000000) {
+    return new Date(num * 1000);
+  }
+
+  // 3. CoreData epoch ミリ秒 (iOSのLINE SQLiteで頻出)
+  if (num >= 100000000000 && num < 1000000000000) {
+    return new Date(num + 978307200000);
+  }
+
+  // 4. Unix epoch ミリ秒
+  if (num >= 1000000000000) {
     return new Date(num);
   }
 
-  const parsedStr = Date.parse(String(rawTime));
-  if (!isNaN(parsedStr)) {
-    return new Date(parsedStr);
-  }
-
-  return null;
+  return new Date(num);
 }
 
 export function formatDateHeader(date: Date): string {
@@ -206,7 +234,7 @@ export function formatTime(date: Date): string {
   return `${h}:${m}`;
 }
 
-// 5. テキスト形式のバックアップファイル（.txt）の解析
+// 5. テキスト形式のバックアップファイル（.txt）解析
 export async function parseLineTextFile(
   file: File,
   fileName: string,
