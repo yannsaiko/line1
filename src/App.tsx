@@ -502,7 +502,7 @@ export default function App() {
                             cursor: 'pointer',
                             border: '1px solid #ffe082',
                             display: 'flex',
-                            justify: 'space-between',
+                            justifyContent: 'space-between',
                             alignItems: 'center'
                           }}
                         >
