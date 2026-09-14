@@ -2,6 +2,32 @@ import React, { useState } from 'react';
 import { getSql, detectSchema, loadDictionaries, fetchChatRooms, parseLineTimestamp, formatDateHeader, formatDate, formatTime, parseLineTextFile } from './utils/lineParser';
 import { ChatRoom, Message, ParsedFileContext } from './types';
 
+// LINE sqlite (iOS/Android) などのタイムスタンプ精度補正関数
+const parseCorrectTimestamp = (rawTime: any): Date | null => {
+  if (!rawTime) return null;
+  if (rawTime instanceof Date && !isNaN(rawTime.getTime())) return rawTime;
+
+  let num = Number(rawTime);
+  if (!isNaN(num) && num > 0) {
+    // iOS (LINE.sqlite) は Mac Cocoa Epoch (2001-01-01 00:00:00 UTC = 978307200 秒) を使用
+    if (num < 1000000000) {
+      num = (num + 978307200) * 1000;
+    } else if (num < 100000000000) {
+      // Unix timestamp (秒単位)
+      num = num * 1000;
+    }
+    const date = new Date(num);
+    if (!isNaN(date.getTime())) return date;
+  }
+
+  // テキスト形式や既存パーサーでのフォールバック処理
+  const fallbackDate = parseLineTimestamp(rawTime);
+  if (fallbackDate && !isNaN(fallbackDate.getTime())) return fallbackDate;
+
+  const d = new Date(rawTime);
+  return isNaN(d.getTime()) ? null : d;
+};
+
 export default function App() {
   const [fileMap, setFileMap] = useState<Record<string, ParsedFileContext>>({});
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
@@ -11,14 +37,18 @@ export default function App() {
   const [activeChat, setActiveChat] = useState<ChatRoom | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(null);
-  
-  // 表示設定・モザイク・削除（非表示）管理
-  const [displayStyle, setDisplayStyle] = useState<'ui' | 'text'>('ui'); // 'ui' = 吹き出し, 'text' = 公式テキスト風
-  const [blurredRoomKeys, setBlurredRoomKeys] = useState<Set<string>>(new Set()); // モザイク設定された部屋
-  const [hiddenRoomKeys, setHiddenRoomKeys] = useState<Set<string>>(new Set()); // 非表示(削除)された部屋
-  const [selectedRoomKeys, setSelectedRoomKeys] = useState<Set<string>>(new Set()); // 一括選択中の部屋
-  const [isBatchMode, setIsBatchMode] = useState<boolean>(false); // 一括選択モードフラグ
-  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false); // 設定ダイアログ表示フラグ
+
+  // 表示設定・モザイク・削除（非表示）管理（部屋単位 ＆ メッセージ単位）
+  const [displayStyle, setDisplayStyle] = useState<'ui' | 'text'>('ui');
+  const [blurredRoomKeys, setBlurredRoomKeys] = useState<Set<string>>(new Set());
+  const [hiddenRoomKeys, setHiddenRoomKeys] = useState<Set<string>>(new Set());
+  const [selectedRoomKeys, setSelectedRoomKeys] = useState<Set<string>>(new Set());
+  const [isBatchMode, setIsBatchMode] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // メッセージ単位のモザイク・削除管理キー: `${roomKey}_${msgId}`
+  const [blurredMsgKeys, setBlurredMsgKeys] = useState<Set<string>>(new Set());
+  const [hiddenMsgKeys, setHiddenMsgKeys] = useState<Set<string>>(new Set());
 
   // UI状態
   const [progress, setProgress] = useState<{ show: boolean; title: string; percent: number }>({ show: false, title: '', percent: 0 });
@@ -78,7 +108,18 @@ export default function App() {
               const { userMap, chatMap } = loadDictionaries(db, schema);
               newFileMap[fileId] = { file, displayLabel: file.name, isText: false, schema, userMap, chatMap };
               const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, file.name);
-              newRooms.push(...rooms);
+              
+              // 部屋名の自動補正（「トーク部屋...」を辞書やユーザー名から補完）
+              const updatedRooms = rooms.map(r => {
+                let name = r.name;
+                if (name.startsWith('トーク部屋') || name === '不明なトーク') {
+                  if (chatMap[r.id]) name = chatMap[r.id];
+                  else if (userMap[r.id]) name = userMap[r.id];
+                }
+                return { ...r, name };
+              });
+
+              newRooms.push(...updatedRooms);
             }
             db.close();
           } catch (e) {
@@ -143,6 +184,8 @@ export default function App() {
         return;
       }
 
+      let identifiedPartnerName = '';
+
       const parsedMsgs: Message[] = res.values.map((r, idx) => {
         const rawText = r[0];
         const isMeVal = r[1];
@@ -167,26 +210,33 @@ export default function App() {
           else text = '[メッセージ (スタンプ/写真/システム)]';
         }
 
-        // 送信者名の補正
-        let senderName = '相手';
+        // 送信者名の精度向上ロジック
+        let senderName = '';
         if (isMe) {
           senderName = '自分';
-        } else if (fileCtx.userMap?.[senderId]) {
-          senderName = fileCtx.userMap[senderId];
-        } else if (fileCtx.chatMap?.[room.id]) {
-          senderName = fileCtx.chatMap[room.id];
-        } else if (room.name && !room.name.startsWith('トーク部屋')) {
-          senderName = room.name;
+        } else {
+          if (fileCtx.userMap?.[senderId]) {
+            senderName = fileCtx.userMap[senderId];
+          } else if (fileCtx.chatMap?.[room.id]) {
+            senderName = fileCtx.chatMap[room.id];
+          } else if (fileCtx.chatMap?.[senderId]) {
+            senderName = fileCtx.chatMap[senderId];
+          }
+
+          if (senderName && senderName !== '相手') {
+            identifiedPartnerName = senderName;
+          }
         }
 
-        const dateObj = parseLineTimestamp(rawTime);
+        // タイムスタンプの補正変換
+        const dateObj = parseCorrectTimestamp(rawTime);
 
         return {
           id: idx,
           text,
           isMe,
           senderId,
-          senderName,
+          senderName: senderName || '相手',
           timeOnlyStr: dateObj ? formatTime(dateObj) : '',
           dateStr: dateObj ? formatDateHeader(dateObj) : '日付不明',
           fullDateTimeStr: dateObj ? `${formatDate(dateObj)} ${formatTime(dateObj)}` : '日付不明',
@@ -194,13 +244,31 @@ export default function App() {
         };
       });
 
+      // 「相手」のままのメッセージや部屋名を特定された名前へ補正
+      const finalPartnerName = identifiedPartnerName || fileCtx.chatMap?.[room.id] || (room.name && !room.name.startsWith('トーク部屋') ? room.name : '');
+
+      if (finalPartnerName) {
+        parsedMsgs.forEach(m => {
+          if (!m.isMe && (m.senderName === '相手' || !m.senderName)) {
+            m.senderName = finalPartnerName;
+          }
+        });
+
+        // 部屋名がデフォルト名の場合は相手の名前に更新
+        if (room.name.startsWith('トーク部屋') || room.name === '不明なトーク') {
+          const updatedRoom = { ...room, name: finalPartnerName };
+          setActiveChat(updatedRoom);
+          setChatRooms(prev => prev.map(r => (r.id === room.id && r.fileId === room.fileId ? updatedRoom : r)));
+        }
+      }
+
       setMessages(parsedMsgs);
     } catch (e) {
       console.error(e);
     }
   };
 
-  // 該当のメッセージへスクロール＆ハイライト表示
+  // メッセージへの移動＆ハイライト表示
   const scrollToMessage = (msgId: number) => {
     setHighlightedMsgId(msgId);
     const element = document.getElementById(`msg-${msgId}`);
@@ -245,6 +313,25 @@ export default function App() {
     }
   };
 
+  // メッセージ個別のモザイク切り替え
+  const toggleMessageBlur = (msgKey: string) => {
+    setBlurredMsgKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(msgKey)) next.delete(msgKey);
+      else next.add(msgKey);
+      return next;
+    });
+  };
+
+  // メッセージ個別の非表示 (削除)
+  const hideMessage = (msgKey: string) => {
+    setHiddenMsgKeys(prev => {
+      const next = new Set(prev);
+      next.add(msgKey);
+      return next;
+    });
+  };
+
   // 全選択・全解除
   const toggleSelectAll = () => {
     if (selectedRoomKeys.size === filteredRooms.length) {
@@ -256,17 +343,22 @@ export default function App() {
 
   const filteredRooms = chatRooms.filter(r => {
     const key = getRoomKey(r);
-    if (hiddenRoomKeys.has(key)) return false; // 非表示済みの部屋を除外
+    if (hiddenRoomKeys.has(key)) return false;
     const matchFile = selectedFileFilter === 'ALL' || r.fileId === selectedFileFilter;
     const matchSearch = r.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchFile && matchSearch;
   });
 
+  const currentRoomKey = activeChat ? getRoomKey(activeChat) : '';
+
+  // メッセージ個別の削除フィルタリング
+  const visibleMessages = messages.filter(m => !hiddenMsgKeys.has(`${currentRoomKey}_${m.id}`));
+
   const searchResults = msgSearchQuery.trim()
-    ? messages.filter(m => m.text.toLowerCase().includes(msgSearchQuery.toLowerCase()))
+    ? visibleMessages.filter(m => m.text.toLowerCase().includes(msgSearchQuery.toLowerCase()))
     : [];
 
-  const isCurrentActiveBlurred = activeChat ? blurredRoomKeys.has(getRoomKey(activeChat)) : false;
+  const isCurrentActiveBlurred = activeChat ? blurredRoomKeys.has(currentRoomKey) : false;
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', background: '#f5f5f5' }}>
@@ -338,7 +430,6 @@ export default function App() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           {/* 左側：トーク部屋一覧 */}
           <div style={{ width: '340px', background: '#fff', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' }}>
-            {/* 検索・一括選択ツールバー */}
             <div style={{ padding: '10px', borderBottom: '1px solid #eee', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <input 
                 type="text" 
@@ -363,7 +454,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* 一括操作ボタンパネル */}
               {isBatchMode && selectedRoomKeys.size > 0 && (
                 <div style={{ display: 'flex', gap: '6px', background: '#fff3e0', padding: '6px', borderRadius: '6px', border: '1px solid #ffe0b2' }}>
                   <button onClick={() => batchToggleBlur(true)} style={{ flex: 1, background: '#795548', color: '#fff', border: 'none', padding: '4px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}>
@@ -379,7 +469,6 @@ export default function App() {
               )}
             </div>
 
-            {/* 部屋リスト */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
               {filteredRooms.map(room => {
                 const roomKey = getRoomKey(room);
@@ -429,32 +518,28 @@ export default function App() {
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: displayStyle === 'ui' ? '#abc1ee' : '#fff' }}>
             {activeChat ? (
               <>
-                {/* メインヘッダー＆トーク内検索 */}
                 <div style={{ background: '#fff', padding: '10px 16px', borderBottom: '1px solid #ddd', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                   <div>
                     <h3 style={{ margin: 0, fontSize: '16px', filter: isCurrentActiveBlurred ? 'blur(5px)' : 'none' }}>
                       {activeChat.name}
                     </h3>
-                    <span style={{ fontSize: '11px', color: '#666' }}>{messages.length}件のメッセージ</span>
+                    <span style={{ fontSize: '11px', color: '#666' }}>{visibleMessages.length}件のメッセージ</span>
                   </div>
 
-                  {/* モザイク個別切替ボタン */}
                   <button 
                     onClick={() => {
-                      const key = getRoomKey(activeChat);
                       setBlurredRoomKeys(prev => {
                         const next = new Set(prev);
-                        if (next.has(key)) next.delete(key);
-                        else next.add(key);
+                        if (next.has(currentRoomKey)) next.delete(currentRoomKey);
+                        else next.add(currentRoomKey);
                         return next;
                       });
                     }}
                     style={{ background: isCurrentActiveBlurred ? '#795548' : '#f0f0f0', color: isCurrentActiveBlurred ? '#fff' : '#333', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}
                   >
-                    {isCurrentActiveBlurred ? '👁️ モザイク解除' : '🌫️ このトークをモザイク'}
+                    {isCurrentActiveBlurred ? '👁️ モザイク解除' : '🌫️ 全体モザイク'}
                   </button>
 
-                  {/* トーク本文検索フィルター */}
                   <div style={{ flex: 1, maxWidth: '300px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <input 
                       type="text" 
@@ -506,7 +591,7 @@ export default function App() {
                             alignItems: 'center'
                           }}
                         >
-                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginRight: '10px', filter: isCurrentActiveBlurred ? 'blur(4px)' : 'none' }}>
+                          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginRight: '10px' }}>
                             <strong>{m.senderName}:</strong> {m.text}
                           </span>
                           <span style={{ fontSize: '10px', color: '#888', flexShrink: 0 }}>{m.fullDateTimeStr}</span>
@@ -516,13 +601,15 @@ export default function App() {
                   </div>
                 )}
 
-                {/* メッセージ表示エリア (UIスタイル / テキストスタイル 切替) */}
+                {/* メッセージ表示エリア */}
                 {displayStyle === 'ui' ? (
-                  /* LINEアプリ風 (吹き出し) 表示 */
+                  /* LINE UI 風表示 */
                   <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {messages.map((m, idx) => {
-                      const showDate = idx === 0 || messages[idx - 1].dateStr !== m.dateStr;
+                    {visibleMessages.map((m, idx) => {
+                      const showDate = idx === 0 || visibleMessages[idx - 1].dateStr !== m.dateStr;
                       const isHighlighted = highlightedMsgId === m.id;
+                      const msgKey = `${currentRoomKey}_${m.id}`;
+                      const isMsgBlurred = isCurrentActiveBlurred || blurredMsgKeys.has(msgKey);
 
                       return (
                         <React.Fragment key={m.id}>
@@ -535,29 +622,51 @@ export default function App() {
                             id={`msg-${m.id}`}
                             style={{ 
                               alignSelf: m.isMe ? 'flex-end' : 'flex-start', 
-                              maxWidth: '70%', 
+                              maxWidth: '75%', 
                               display: 'flex', 
                               flexDirection: 'column',
                               transition: 'all 0.3s ease'
                             }}
                           >
-                            <span style={{ fontSize: '11px', color: '#444', marginBottom: '2px', textAlign: m.isMe ? 'right' : 'left', filter: isCurrentActiveBlurred ? 'blur(4px)' : 'none' }}>
+                            <span style={{ fontSize: '11px', color: '#444', marginBottom: '2px', textAlign: m.isMe ? 'right' : 'left' }}>
                               {m.senderName}
                             </span>
-                            <div style={{
-                              background: isHighlighted ? '#fff59d' : (m.isMe ? '#85e249' : '#fff'),
-                              color: '#000',
-                              padding: '8px 12px',
-                              borderRadius: '14px',
-                              fontSize: '14px',
-                              boxShadow: isHighlighted ? '0 0 10px #fbc02d' : '0 1px 2px rgba(0,0,0,0.1)',
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                              filter: isCurrentActiveBlurred ? 'blur(5px)' : 'none',
-                              outline: isHighlighted ? '2px solid #fbc02d' : 'none'
-                            }}>
-                              {m.text}
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: m.isMe ? 'row-reverse' : 'row' }}>
+                              <div style={{
+                                background: isHighlighted ? '#fff59d' : (m.isMe ? '#85e249' : '#fff'),
+                                color: '#000',
+                                padding: '8px 12px',
+                                borderRadius: '14px',
+                                fontSize: '14px',
+                                boxShadow: isHighlighted ? '0 0 10px #fbc02d' : '0 1px 2px rgba(0,0,0,0.1)',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                filter: isMsgBlurred ? 'blur(5px)' : 'none',
+                                outline: isHighlighted ? '2px solid #fbc02d' : 'none'
+                              }}>
+                                {m.text}
+                              </div>
+
+                              {/* メッセージ個別操作ボタン */}
+                              <div style={{ display: 'flex', gap: '2px', opacity: 0.7 }}>
+                                <button 
+                                  title={blurredMsgKeys.has(msgKey) ? "モザイク解除" : "このメッセージをモザイク"} 
+                                  onClick={() => toggleMessageBlur(msgKey)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
+                                >
+                                  {blurredMsgKeys.has(msgKey) ? '👁️' : '🌫️'}
+                                </button>
+                                <button 
+                                  title="このメッセージを削除（非表示）" 
+                                  onClick={() => hideMessage(msgKey)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
+                                >
+                                  🗑️
+                                </button>
+                              </div>
                             </div>
+
                             <span style={{ fontSize: '10px', color: 'rgba(0,0,0,0.5)', marginTop: '2px', textAlign: m.isMe ? 'right' : 'left' }}>
                               {m.fullDateTimeStr}
                             </span>
@@ -567,14 +676,16 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  /* 公式LINEテキストバックアップ風 表示 */
+                  /* テキスト風表示 */
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', fontFamily: 'monospace', background: '#fff', fontSize: '13px', lineHeight: '1.6', color: '#222' }}>
                     <div style={{ fontWeight: 'bold', marginBottom: '16px', borderBottom: '2px solid #333', paddingBottom: '8px', filter: isCurrentActiveBlurred ? 'blur(5px)' : 'none' }}>
                       [LINE] {activeChat.name}とのトーク履歴
                     </div>
-                    {messages.map((m, idx) => {
-                      const showDate = idx === 0 || messages[idx - 1].dateStr !== m.dateStr;
+                    {visibleMessages.map((m, idx) => {
+                      const showDate = idx === 0 || visibleMessages[idx - 1].dateStr !== m.dateStr;
                       const isHighlighted = highlightedMsgId === m.id;
+                      const msgKey = `${currentRoomKey}_${m.id}`;
+                      const isMsgBlurred = isCurrentActiveBlurred || blurredMsgKeys.has(msgKey);
 
                       return (
                         <div key={m.id} id={`msg-${m.id}`}>
@@ -586,11 +697,28 @@ export default function App() {
                           <div style={{ 
                             padding: '2px 6px', 
                             background: isHighlighted ? '#fff59d' : 'transparent',
-                            filter: isCurrentActiveBlurred ? 'blur(4px)' : 'none' 
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
                           }}>
-                            <span>{m.timeOnlyStr || '00:00'}</span>
-                            <span style={{ margin: '0 12px', fontWeight: 'bold' }}>{m.senderName}</span>
-                            <span style={{ whiteSpace: 'pre-wrap' }}>{m.text}</span>
+                            <span style={{ filter: isMsgBlurred ? 'blur(4px)' : 'none' }}>
+                              {m.timeOnlyStr || '00:00'} <strong style={{ margin: '0 8px' }}>{m.senderName}:</strong> {m.text}
+                            </span>
+                            
+                            <button 
+                              title="モザイク切替" 
+                              onClick={() => toggleMessageBlur(msgKey)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px' }}
+                            >
+                              {blurredMsgKeys.has(msgKey) ? '👁️' : '🌫️'}
+                            </button>
+                            <button 
+                              title="メッセージを削除" 
+                              onClick={() => hideMessage(msgKey)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px' }}
+                            >
+                              🗑️
+                            </button>
                           </div>
                         </div>
                       );
@@ -607,13 +735,12 @@ export default function App() {
         </div>
       )}
 
-      {/* 設定モーダルダイアログ */}
+      {/* 設定ダイアログ */}
       {showSettingsModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div style={{ background: '#fff', width: '450px', borderRadius: '12px', padding: '20px', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
             <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>⚙️ アプリ設定</h3>
 
-            {/* 表示形式設定 */}
             <div style={{ marginBottom: '20px' }}>
               <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>💬 表示形式の選択</label>
               <div style={{ display: 'flex', gap: '10px' }}>
@@ -630,7 +757,7 @@ export default function App() {
                     cursor: 'pointer'
                   }}
                 >
-                  📱 LINEアプリ風<br/><span style={{ fontSize: '11px', fontWeight: 'normal', color: '#666' }}>（吹き出し画面）</span>
+                  📱 LINEアプリ風
                 </button>
                 <button 
                   onClick={() => setDisplayStyle('text')}
@@ -645,17 +772,16 @@ export default function App() {
                     cursor: 'pointer'
                   }}
                 >
-                  📄 公式テキスト風<br/><span style={{ fontSize: '11px', fontWeight: 'normal', color: '#666' }}>（バックアップ.txt形式）</span>
+                  📄 公式テキスト風
                 </button>
               </div>
             </div>
 
-            {/* 非表示・モザイク管理設定 */}
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>🛡️ モザイク・非表示の管理</label>
+              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>🛡️ モザイク・非表示管理</label>
               <div style={{ fontSize: '13px', color: '#555', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>モザイク中のトーク部屋: {blurredRoomKeys.size}件</span>
+                  <span>モザイク中の部屋: {blurredRoomKeys.size}件</span>
                   {blurredRoomKeys.size > 0 && (
                     <button onClick={() => setBlurredRoomKeys(new Set())} style={{ background: '#f0f0f0', border: '1px solid #ccc', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
                       すべて解除
@@ -663,9 +789,25 @@ export default function App() {
                   )}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>非表示(削除)中のトーク部屋: {hiddenRoomKeys.size}件</span>
+                  <span>非表示中の部屋: {hiddenRoomKeys.size}件</span>
                   {hiddenRoomKeys.size > 0 && (
                     <button onClick={() => setHiddenRoomKeys(new Set())} style={{ background: '#f0f0f0', border: '1px solid #ccc', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+                      すべて再表示
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>個別にモザイク中のメッセージ: {blurredMsgKeys.size}件</span>
+                  {blurredMsgKeys.size > 0 && (
+                    <button onClick={() => setBlurredMsgKeys(new Set())} style={{ background: '#f0f0f0', border: '1px solid #ccc', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+                      すべて解除
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>個別に削除(非表示)中のメッセージ: {hiddenMsgKeys.size}件</span>
+                  {hiddenMsgKeys.size > 0 && (
+                    <button onClick={() => setHiddenMsgKeys(new Set())} style={{ background: '#f0f0f0', border: '1px solid #ccc', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
                       すべて再表示
                     </button>
                   )}
@@ -673,7 +815,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* モーダル閉じるボタン */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #eee', paddingTop: '12px' }}>
               <button 
                 onClick={() => setShowSettingsModal(false)} 
