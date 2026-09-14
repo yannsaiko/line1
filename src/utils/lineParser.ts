@@ -1,13 +1,16 @@
 import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
+// Viteの機能でWASMファイルをビルド成果物に直接同梱
+// @ts-ignore
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import { ChatRoom, ParsedFileContext, Message } from '../types';
 
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
-// WebAssembly (sql.js) の初期化 (unpkg CDNを使用)
+// WebAssembly (sql.js) の初期化 (ローカルファイルから安全に読み込み)
 export function getSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
-      locateFile: file => `https://unpkg.com/sql.js@1.8.0/dist/${file}`
+      locateFile: () => sqlWasmUrl
     });
   }
   return sqlPromise;
@@ -165,14 +168,11 @@ export function parseLineTimestamp(rawTime: any): Date | null {
   const num = Number(rawTime);
   if (!isNaN(num) && num > 0) {
     if (num < 1000000000) {
-      // CoreData 2001-01-01 基準エポック
       return new Date((num + 978307200) * 1000);
     }
     if (num < 10000000000) {
-      // Unix Timestamp (秒)
       return new Date(num * 1000);
     }
-    // Unix Timestamp (ミリ秒)
     return new Date(num);
   }
 
