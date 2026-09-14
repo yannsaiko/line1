@@ -1,16 +1,23 @@
 import React from 'react';
+import { LineChat, LineMessage } from '../types/chat';
 import { formatMessageTime } from '../utils/dateFormatter';
 import { getPartnerUser, getRoomDisplayTitle, isSameUserId } from '../utils/chatHelper';
 
 interface ChatRoomProps {
-  room: any;
-  currentUserId: any;
+  room: LineChat;
+  currentUserId: string; // 自分の ZMID (例: "u12345678...")
 }
 
 export const ChatRoom: React.FC<ChatRoomProps> = ({ room, currentUserId }) => {
   const roomTitle = getRoomDisplayTitle(room, currentUserId);
   const partnerUser = getPartnerUser(room, currentUserId);
-  const messages: any[] = room?.messages || room?.messageList || room?.message_list || [];
+
+  // 表示名：設定変更名(ZCUSTOMNAME)があれば最優先
+  const partnerDisplayName = partnerUser
+    ? partnerUser.ZCUSTOMNAME || partnerUser.ZNAME || 'トーク相手'
+    : 'トーク相手';
+
+  const messages = room?.messages || [];
 
   return (
     <div className="chat-container">
@@ -21,45 +28,28 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ room, currentUserId }) => {
 
       {/* メッセージ一覧 */}
       <div className="message-list">
-        {messages.map((message: any, index: number) => {
-          const senderId = message.senderId || message.sender_id || message.userId || message.user_id || message.uid;
+        {messages.map((message: LineMessage, index: number) => {
+          // 送信者ID判定（ZSENDER または ZSENDERHEADER）
+          const senderId = message.ZSENDER || message.ZSENDERHEADER;
           const isMyMessage = isSameUserId(senderId, currentUserId);
 
-          // タイムスタンプ取得の多角化
-          const rawTime = 
-            message.createdAt || 
-            message.created_at || 
-            message.timestamp || 
-            message.time || 
-            message.date || 
-            message.sentAt;
-
-          const formattedTime = formatMessageTime(rawTime);
+          // ZCREATEDTIME (13桁ミリ秒) から時刻フォーマット
+          const formattedTime = formatMessageTime(message.ZCREATEDTIME);
 
           return (
             <div
-              key={message.id || message.messageId || message.message_id || index}
+              key={message.Z_PK || index}
               className={`message-item ${isMyMessage ? 'my-message' : 'partner-message'}`}
             >
               {!isMyMessage && (
-                <span className="sender-name">
-                  {partnerUser?.name || message.senderName || message.sender_name || 'トーク相手'}
-                </span>
+                <span className="sender-name">{partnerDisplayName}</span>
               )}
-              <div className="message-bubble">{message.text || message.content || message.body}</div>
+              <div className="message-bubble">{message.ZTEXT || ''}</div>
               <span className="message-time">{formattedTime}</span>
             </div>
           );
         })}
       </div>
-
-      {/* 解決しない場合用のデバッグ表示枠 */}
-      <details style={{ marginTop: '20px', padding: '10px', background: '#f5f5f5', border: '1px solid #ccc' }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>【データ構造の確認用デバッグエリア】</summary>
-        <pre style={{ fontSize: '11px', textAlign: 'left', overflowX: 'auto' }}>
-          {JSON.stringify({ currentUserId, room }, null, 2)}
-        </pre>
-      </details>
     </div>
   );
 };
