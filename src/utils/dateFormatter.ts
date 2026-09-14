@@ -1,40 +1,17 @@
 /**
- * タイムスタンプを安全にフォーマットする
+ * Line.sqlite の ZCREATEDTIME（13桁ミリ秒）を正確な「HH:mm」に変換
  */
-export const formatMessageTime = (dateInput: any): string => {
-  // 空値・null・undefined・0 の場合は 1970年 にせず '--:--' を返す
-  if (!dateInput || dateInput === 0) return '--:--';
+export const formatMessageTime = (createdTime: number | string | null | undefined): string => {
+  if (!createdTime || createdTime === 0) return '--:--';
 
-  let date: Date;
+  const numTime = typeof createdTime === 'string' ? Number(createdTime) : createdTime;
+  if (isNaN(numTime) || numTime <= 0) return '--:--';
 
-  // 1. Firebase Firestore Timestamp型 ({ seconds: ..., nanoseconds: ... } または .toDate())
-  if (typeof dateInput === 'object' && dateInput !== null) {
-    if (typeof dateInput.toDate === 'function') {
-      date = dateInput.toDate();
-    } else if ('seconds' in dateInput && typeof dateInput.seconds === 'number') {
-      date = new Date(dateInput.seconds * 1000);
-    } else if ('_seconds' in dateInput && typeof dateInput._seconds === 'number') {
-      date = new Date(dateInput._seconds * 1000);
-    } else {
-      date = new Date(dateInput);
-    }
-  }
-  // 2. UNIXタイムスタンプ（数値）
-  else if (typeof dateInput === 'number') {
-    date = new Date(dateInput < 10000000000 ? dateInput * 1000 : dateInput);
-  }
-  // 3. 文字列
-  else if (typeof dateInput === 'string') {
-    const normalizedStr = dateInput.includes(' ') && !dateInput.includes('T')
-      ? dateInput.replace(' ', 'T')
-      : dateInput;
-    date = new Date(normalizedStr);
-  } 
-  else {
-    date = new Date(dateInput);
-  }
+  // 10桁（秒）の場合はミリ秒に補正し、13桁（ミリ秒）はそのまま使用
+  const timestampMs = numTime < 10000000000 ? numTime * 1000 : numTime;
+  const date = new Date(timestampMs);
 
-  // 無効な日付、または 1970年（エポックタイム）になってしまった場合の判定ガード
+  // パース失敗または 1970年初期値の防護
   if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
     return '--:--';
   }
