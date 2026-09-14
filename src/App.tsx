@@ -2,30 +2,77 @@ import React, { useState } from 'react';
 import { getSql, detectSchema, loadDictionaries, fetchChatRooms, parseLineTimestamp, formatDateHeader, formatDate, formatTime, parseLineTextFile } from './utils/lineParser';
 import { ChatRoom, Message, ParsedFileContext } from './types';
 
-// LINE sqlite (iOS/Android) などのタイムスタンプ精度補正関数
-const parseCorrectTimestamp = (rawTime: any): Date | null => {
-  if (!rawTime) return null;
+/**
+ * タイムスタンプ判定（精度最優先）
+ * iOS Mac Cocoa Epoch (秒/ミリ秒) と Unix Epoch (秒/ミリ秒/マイクロ秒) を多角的に検証
+ */
+const parseExactTimestamp = (rawTime: any): Date | null => {
+  if (rawTime === null || rawTime === undefined || rawTime === '') return null;
   if (rawTime instanceof Date && !isNaN(rawTime.getTime())) return rawTime;
 
   let num = Number(rawTime);
+  
   if (!isNaN(num) && num > 0) {
-    // iOS (LINE.sqlite) は Mac Cocoa Epoch (2001-01-01 00:00:00 UTC = 978307200 秒) を使用
-    if (num < 1000000000) {
-      num = (num + 978307200) * 1000;
-    } else if (num < 100000000000) {
-      // Unix timestamp (秒単位)
-      num = num * 1000;
+    // 1. iOS Mac Cocoa Epoch (秒単位: 2001-01-01 00:00:00 UTC = +978307200秒)
+    // 1億〜20億程度は Cocoa Epoch 秒の可能性が高い
+    if (num > 100000000 && num < 2000000000) {
+      const unixSec = num + 978307200;
+      const d = new Date(unixSec * 1000);
+      if (d.getFullYear() >= 2005 && d.getFullYear() <= 2035) return d;
     }
-    const date = new Date(num);
-    if (!isNaN(date.getTime())) return date;
+
+    // 2. iOS Mac Cocoa Epoch (ミリ秒単位)
+    if (num > 100000000000000 && num < 2000000000000000) {
+      const unixMs = (num / 1000) + (978307200 * 1000);
+      const d = new Date(unixMs);
+      if (d.getFullYear() >= 2005 && d.getFullYear() <= 2035) return d;
+    }
+
+    // 3. Unix Timestamp (ミリ秒単位: 13桁)
+    if (num > 1000000000000 && num < 2000000000000) {
+      const d = new Date(num);
+      if (d.getFullYear() >= 2005 && d.getFullYear() <= 2035) return d;
+    }
+
+    // 4. Unix Timestamp (秒単位: 10桁)
+    if (num > 1000000000 && num < 2000000000) {
+      const d = new Date(num * 1000);
+      if (d.getFullYear() >= 2005 && d.getFullYear() <= 2035) return d;
+    }
+
+    // 5. マイクロ秒単位の Unix Timestamp (16桁以上)
+    if (num > 1000000000000000) {
+      const d = new Date(Math.floor(num / 1000));
+      if (d.getFullYear() >= 2005 && d.getFullYear() <= 2035) return d;
+    }
   }
 
-  // テキスト形式や既存パーサーでのフォールバック処理
+  // テキスト形式やその他のフォーマット解析
   const fallbackDate = parseLineTimestamp(rawTime);
   if (fallbackDate && !isNaN(fallbackDate.getTime())) return fallbackDate;
 
-  const d = new Date(rawTime);
-  return isNaN(d.getTime()) ? null : d;
+  const strDate = new Date(rawTime);
+  return !isNaN(strDate.getTime()) ? strDate : null;
+};
+
+/**
+ * LINE メッセージタイプの高精度ラベル付け
+ */
+const resolveMessageTypeLabel = (msgType: number, text: string): string => {
+  if (text && text.trim().length > 0) return text;
+
+  switch (msgType) {
+    case 1: return '📷 [画像]';
+    case 2: return '🎥 [動画]';
+    case 3: return '🎵 [音声メッセージ]';
+    case 6: return '📍 [位置情報]';
+    case 7: return '🎨 [スタンプ]';
+    case 10: return '📞 [通話履歴]';
+    case 14: return '📁 [ファイル]';
+    case 16: return '📖 [ノート・アルバム更新]';
+    case 18: return '🤝 [連絡先共有]';
+    default: return '[メッセージ (スタンプ/メディア/システム)]';
+  }
 };
 
 export default function App() {
@@ -38,7 +85,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [highlightedMsgId, setHighlightedMsgId] = useState<number | null>(null);
 
-  // 表示設定・モザイク・削除（非表示）管理（部屋単位 ＆ メッセージ単位）
+  // 表示スタイル・モザイク・非表示管理
   const [displayStyle, setDisplayStyle] = useState<'ui' | 'text'>('ui');
   const [blurredRoomKeys, setBlurredRoomKeys] = useState<Set<string>>(new Set());
   const [hiddenRoomKeys, setHiddenRoomKeys] = useState<Set<string>>(new Set());
@@ -46,22 +93,21 @@ export default function App() {
   const [isBatchMode, setIsBatchMode] = useState<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
-  // メッセージ単位のモザイク・削除管理キー: `${roomKey}_${msgId}`
+  // メッセージ単位のモザイク・非表示キー
   const [blurredMsgKeys, setBlurredMsgKeys] = useState<Set<string>>(new Set());
   const [hiddenMsgKeys, setHiddenMsgKeys] = useState<Set<string>>(new Set());
 
-  // UI状態
+  // 詳細進捗表示
   const [progress, setProgress] = useState<{ show: boolean; title: string; percent: number }>({ show: false, title: '', percent: 0 });
 
-  // 部屋の一意のキーを生成 (fileId + id)
   const getRoomKey = (room: ChatRoom) => `${room.fileId}_${room.id}`;
 
-  // ファイル / フォルダーのアップロード処理
+  // 高精度ファイル読み込み処理
   const handleFileUpload = async (files: FileList | File[]) => {
     const fileList = Array.from(files);
     if (fileList.length === 0) return;
 
-    setProgress({ show: true, title: 'データベースエンジン (sql.js) を準備中...', percent: 10 });
+    setProgress({ show: true, title: 'データベースエンジン (sql.js) を準備中...', percent: 5 });
 
     try {
       const SQL = await getSql().catch(err => {
@@ -86,9 +132,9 @@ export default function App() {
         }
 
         const currentPercent = Math.round(10 + ((i + 1) / fileList.length) * 85);
-        setProgress({ show: true, title: `解析中 (${i + 1}/${fileList.length}): ${file.name}`, percent: currentPercent });
+        setProgress({ show: true, title: `詳細解析中 (${i + 1}/${fileList.length}): ${file.name}`, percent: currentPercent });
 
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise(resolve => setTimeout(resolve, 20));
 
         counter++;
         const fileId = `file_${counter}`;
@@ -104,26 +150,27 @@ export default function App() {
             const buf = await file.arrayBuffer();
             const db = new SQL.Database(new Uint8Array(buf));
             const schema = detectSchema(db);
+
             if (schema && schema.msgTable) {
               const { userMap, chatMap } = loadDictionaries(db, schema);
               newFileMap[fileId] = { file, displayLabel: file.name, isText: false, schema, userMap, chatMap };
               const rooms = fetchChatRooms(db, schema, userMap, chatMap, fileId, file.name);
-              
-              // 部屋名の自動補正（「トーク部屋...」を辞書やユーザー名から補完）
-              const updatedRooms = rooms.map(r => {
-                let name = r.name;
-                if (name.startsWith('トーク部屋') || name === '不明なトーク') {
-                  if (chatMap[r.id]) name = chatMap[r.id];
-                  else if (userMap[r.id]) name = userMap[r.id];
+
+              // トーク部屋名の高精度解決
+              const resolvedRooms = rooms.map(r => {
+                let resolvedName = r.name;
+                if (resolvedName.startsWith('トーク部屋') || resolvedName === '不明なトーク' || !resolvedName.trim()) {
+                  if (chatMap[r.id]) resolvedName = chatMap[r.id];
+                  else if (userMap[r.id]) resolvedName = userMap[r.id];
                 }
-                return { ...r, name };
+                return { ...r, name: resolvedName || 'トーク相手' };
               });
 
-              newRooms.push(...updatedRooms);
+              newRooms.push(...resolvedRooms);
             }
             db.close();
           } catch (e) {
-            // スキップ
+            console.error('ファイル解析スキップ:', file.name, e);
           }
         }
       }
@@ -141,7 +188,7 @@ export default function App() {
     }
   };
 
-  // トーク部屋選択時のメッセージ読み込み
+  // メッセージの解読・名前・時刻の完全補正
   const selectChatRoom = async (room: ChatRoom) => {
     if (isBatchMode) {
       toggleRoomSelection(getRoomKey(room));
@@ -184,8 +231,9 @@ export default function App() {
         return;
       }
 
-      let identifiedPartnerName = '';
+      let detectedPartnerName = '';
 
+      // メッセージデータの精密変換
       const parsedMsgs: Message[] = res.values.map((r, idx) => {
         const rawText = r[0];
         const isMeVal = r[1];
@@ -200,75 +248,62 @@ export default function App() {
           isMe = (!senderId || senderId === '0' || senderId === '' || senderId === 'null');
         }
 
-        let text = String(rawText || '');
-        if (!text.trim()) {
-          if (msgType === 1) text = '[📷 画像]';
-          else if (msgType === 2) text = '[🎥 動画]';
-          else if (msgType === 3) text = '[🎵 音声メッセージ]';
-          else if (msgType === 6) text = '[📍 位置情報]';
-          else if (msgType === 7) text = '[🎨 スタンプ]';
-          else text = '[メッセージ (スタンプ/写真/システム)]';
-        }
+        const formattedText = resolveMessageTypeLabel(msgType, String(rawText || ''));
 
-        // 送信者名の精度向上ロジック
+        // 送信者名の精度向上処理
         let senderName = '';
         if (isMe) {
           senderName = '自分';
         } else {
-          if (fileCtx.userMap?.[senderId]) {
-            senderName = fileCtx.userMap[senderId];
-          } else if (fileCtx.chatMap?.[room.id]) {
-            senderName = fileCtx.chatMap[room.id];
-          } else if (fileCtx.chatMap?.[senderId]) {
-            senderName = fileCtx.chatMap[senderId];
-          }
+          if (fileCtx.userMap?.[senderId]) senderName = fileCtx.userMap[senderId];
+          else if (fileCtx.chatMap?.[room.id]) senderName = fileCtx.chatMap[room.id];
+          else if (fileCtx.chatMap?.[senderId]) senderName = fileCtx.chatMap[senderId];
 
-          if (senderName && senderName !== '相手') {
-            identifiedPartnerName = senderName;
+          if (senderName && senderName !== '相手' && senderName !== '自分') {
+            detectedPartnerName = senderName;
           }
         }
 
-        // タイムスタンプの補正変換
-        const dateObj = parseCorrectTimestamp(rawTime);
+        // 精密タイムスタンプ変換
+        const dateObj = parseExactTimestamp(rawTime);
 
         return {
           id: idx,
-          text,
+          text: formattedText,
           isMe,
           senderId,
           senderName: senderName || '相手',
-          timeOnlyStr: dateObj ? formatTime(dateObj) : '',
+          timeOnlyStr: dateObj ? formatTime(dateObj) : '00:00',
           dateStr: dateObj ? formatDateHeader(dateObj) : '日付不明',
           fullDateTimeStr: dateObj ? `${formatDate(dateObj)} ${formatTime(dateObj)}` : '日付不明',
           timestamp: dateObj ? dateObj.getTime() : 0
         };
       });
 
-      // 「相手」のままのメッセージや部屋名を特定された名前へ補正
-      const finalPartnerName = identifiedPartnerName || fileCtx.chatMap?.[room.id] || (room.name && !room.name.startsWith('トーク部屋') ? room.name : '');
+      // タイムスタンプ順に確定ソート
+      parsedMsgs.sort((a, b) => a.timestamp - b.timestamp);
 
-      if (finalPartnerName) {
-        parsedMsgs.forEach(m => {
-          if (!m.isMe && (m.senderName === '相手' || !m.senderName)) {
-            m.senderName = finalPartnerName;
-          }
-        });
+      // 部屋名・相手の表記の最終補完
+      const finalPartnerName = detectedPartnerName || fileCtx.chatMap?.[room.id] || (room.name && !room.name.startsWith('トーク部屋') ? room.name : 'トーク相手');
 
-        // 部屋名がデフォルト名の場合は相手の名前に更新
-        if (room.name.startsWith('トーク部屋') || room.name === '不明なトーク') {
-          const updatedRoom = { ...room, name: finalPartnerName };
-          setActiveChat(updatedRoom);
-          setChatRooms(prev => prev.map(r => (r.id === room.id && r.fileId === room.fileId ? updatedRoom : r)));
+      parsedMsgs.forEach(m => {
+        if (!m.isMe && (m.senderName === '相手' || !m.senderName)) {
+          m.senderName = finalPartnerName;
         }
+      });
+
+      if (room.name.startsWith('トーク部屋') || room.name === '不明なトーク') {
+        const updatedRoom = { ...room, name: finalPartnerName };
+        setActiveChat(updatedRoom);
+        setChatRooms(prev => prev.map(r => (r.id === room.id && r.fileId === room.fileId ? updatedRoom : r)));
       }
 
       setMessages(parsedMsgs);
     } catch (e) {
-      console.error(e);
+      console.error('メッセージ取得エラー:', e);
     }
   };
 
-  // メッセージへの移動＆ハイライト表示
   const scrollToMessage = (msgId: number) => {
     setHighlightedMsgId(msgId);
     const element = document.getElementById(`msg-${msgId}`);
@@ -280,7 +315,6 @@ export default function App() {
     }, 2500);
   };
 
-  // 一括選択の切り替え
   const toggleRoomSelection = (key: string) => {
     setSelectedRoomKeys(prev => {
       const next = new Set(prev);
@@ -290,7 +324,6 @@ export default function App() {
     });
   };
 
-  // 一括モザイク適用/解除
   const batchToggleBlur = (blur: boolean) => {
     setBlurredRoomKeys(prev => {
       const next = new Set(prev);
@@ -299,7 +332,6 @@ export default function App() {
     });
   };
 
-  // 一括非表示 (削除)
   const batchHideRooms = () => {
     if (!window.confirm(`選択した ${selectedRoomKeys.size} 件のトーク部屋を非表示（リストから削除）にしますか？`)) return;
     setHiddenRoomKeys(prev => {
@@ -313,7 +345,6 @@ export default function App() {
     }
   };
 
-  // メッセージ個別のモザイク切り替え
   const toggleMessageBlur = (msgKey: string) => {
     setBlurredMsgKeys(prev => {
       const next = new Set(prev);
@@ -323,7 +354,6 @@ export default function App() {
     });
   };
 
-  // メッセージ個別の非表示 (削除)
   const hideMessage = (msgKey: string) => {
     setHiddenMsgKeys(prev => {
       const next = new Set(prev);
@@ -332,7 +362,6 @@ export default function App() {
     });
   };
 
-  // 全選択・全解除
   const toggleSelectAll = () => {
     if (selectedRoomKeys.size === filteredRooms.length) {
       setSelectedRoomKeys(new Set());
@@ -350,8 +379,6 @@ export default function App() {
   });
 
   const currentRoomKey = activeChat ? getRoomKey(activeChat) : '';
-
-  // メッセージ個別の削除フィルタリング
   const visibleMessages = messages.filter(m => !hiddenMsgKeys.has(`${currentRoomKey}_${m.id}`));
 
   const searchResults = msgSearchQuery.trim()
@@ -364,7 +391,7 @@ export default function App() {
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif', background: '#f5f5f5' }}>
       {/* ヘッダー */}
       <header style={{ background: '#06c755', color: '#fff', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ fontSize: '18px', margin: 0 }}>LINE トーク履歴マルチビューア</h1>
+        <h1 style={{ fontSize: '18px', margin: 0 }}>LINE トーク履歴マルチビューア (高精度解析モード)</h1>
         {Object.keys(fileMap).length > 0 && (
           <div style={{ display: 'flex', gap: '10px' }}>
             <button 
@@ -383,15 +410,15 @@ export default function App() {
         )}
       </header>
 
-      {/* ファイル選択画面 */}
+      {/* ファイルドロップ・選択画面 */}
       {Object.keys(fileMap).length === 0 ? (
         <div 
           onDragOver={e => e.preventDefault()} 
           onDrop={e => { e.preventDefault(); handleFileUpload(e.dataTransfer.files); }}
           style={{ flex: 1, border: '3px dashed #06c755', margin: '20px', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#fff' }}
         >
-          <h2>ファイルまたはフォルダーをドロップ</h2>
-          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` や `.txt` バックアップファイルをドロップするか選択してください</p>
+          <h2>LINE バックアップファイルまたはフォルダーをドロップ</h2>
+          <p style={{ color: '#666', marginTop: '8px' }}>`Line.sqlite` データベースや `.txt` トーク履歴ファイルを読み込みます</p>
 
           {progress.show && (
             <div style={{ margin: '16px 0', padding: '12px 24px', background: '#e8f8ee', borderRadius: '8px', border: '1px solid #06c755', textAlign: 'center' }}>
@@ -426,14 +453,14 @@ export default function App() {
           </div>
         </div>
       ) : (
-        /* ビューアー画面 */
+        /* メインビューアー */
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-          {/* 左側：トーク部屋一覧 */}
+          {/* 左側：トーク一覧 */}
           <div style={{ width: '340px', background: '#fff', borderRight: '1px solid #ddd', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '10px', borderBottom: '1px solid #eee', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <input 
                 type="text" 
-                placeholder="トーク部屋名で絞り込み..." 
+                placeholder="トーク部屋名で検索..." 
                 value={searchQuery} 
                 onChange={e => setSearchQuery(e.target.value)} 
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' }}
@@ -444,12 +471,12 @@ export default function App() {
                   onClick={() => { setIsBatchMode(!isBatchMode); setSelectedRoomKeys(new Set()); }}
                   style={{ background: isBatchMode ? '#ff9800' : '#f0f0f0', color: isBatchMode ? '#fff' : '#333', border: 'none', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
                 >
-                  {isBatchMode ? '一括選択を終了' : '☑ 一括編集'}
+                  {isBatchMode ? '一括選択を終了' : '☑ 一括操作'}
                 </button>
 
                 {isBatchMode && (
                   <button onClick={toggleSelectAll} style={{ background: 'none', border: 'none', color: '#0084ff', cursor: 'pointer', fontSize: '12px' }}>
-                    {selectedRoomKeys.size === filteredRooms.length ? '選択解除' : 'すべて選択'}
+                    {selectedRoomKeys.size === filteredRooms.length ? '全解除' : 'すべて選択'}
                   </button>
                 )}
               </div>
@@ -514,7 +541,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* 右側：トーク本文エリア */}
+          {/* 右側：トークエリア */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: displayStyle === 'ui' ? '#abc1ee' : '#fff' }}>
             {activeChat ? (
               <>
@@ -566,11 +593,11 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* 検索結果パネル */}
+                {/* 検索結果表示 */}
                 {msgSearchQuery.trim() && (
                   <div style={{ background: '#fff9c4', padding: '8px 16px', borderBottom: '1px solid #fbc02d', maxHeight: '140px', overflowY: 'auto', fontSize: '13px' }}>
                     <div style={{ fontWeight: 'bold', marginBottom: '4px', color: '#574300' }}>
-                      検索結果: {searchResults.length}件 (クリックで該当メッセージへ移動)
+                      検索結果: {searchResults.length}件 (クリックで対象メッセージへ移動)
                     </div>
                     {searchResults.length === 0 ? (
                       <div style={{ color: '#888' }}>該当するメッセージが見つかりません</div>
@@ -601,9 +628,9 @@ export default function App() {
                   </div>
                 )}
 
-                {/* メッセージ表示エリア */}
+                {/* 本文エリア */}
                 {displayStyle === 'ui' ? (
-                  /* LINE UI 風表示 */
+                  /* LINE UI 風 */
                   <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {visibleMessages.map((m, idx) => {
                       const showDate = idx === 0 || visibleMessages[idx - 1].dateStr !== m.dateStr;
@@ -648,17 +675,17 @@ export default function App() {
                                 {m.text}
                               </div>
 
-                              {/* メッセージ個別操作ボタン */}
+                              {/* メッセージ単位のモザイク・削除ボタン */}
                               <div style={{ display: 'flex', gap: '2px', opacity: 0.7 }}>
                                 <button 
-                                  title={blurredMsgKeys.has(msgKey) ? "モザイク解除" : "このメッセージをモザイク"} 
+                                  title={blurredMsgKeys.has(msgKey) ? "モザイク解除" : "モザイク適用"} 
                                   onClick={() => toggleMessageBlur(msgKey)}
                                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
                                 >
                                   {blurredMsgKeys.has(msgKey) ? '👁️' : '🌫️'}
                                 </button>
                                 <button 
-                                  title="このメッセージを削除（非表示）" 
+                                  title="このメッセージを削除" 
                                   onClick={() => hideMessage(msgKey)}
                                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', fontSize: '12px' }}
                                 >
@@ -676,7 +703,7 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  /* テキスト風表示 */
+                  /* テキスト風 */
                   <div style={{ flex: 1, overflowY: 'auto', padding: '20px', fontFamily: 'monospace', background: '#fff', fontSize: '13px', lineHeight: '1.6', color: '#222' }}>
                     <div style={{ fontWeight: 'bold', marginBottom: '16px', borderBottom: '2px solid #333', paddingBottom: '8px', filter: isCurrentActiveBlurred ? 'blur(5px)' : 'none' }}>
                       [LINE] {activeChat.name}とのトーク履歴
@@ -742,7 +769,7 @@ export default function App() {
             <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>⚙️ アプリ設定</h3>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>💬 表示形式の選択</label>
+              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>💬 表示形式</label>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button 
                   onClick={() => setDisplayStyle('ui')}
@@ -778,7 +805,7 @@ export default function App() {
             </div>
 
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>🛡️ モザイク・非表示管理</label>
+              <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>🛡️ 状態の復元・再表示</label>
               <div style={{ fontSize: '13px', color: '#555', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>モザイク中の部屋: {blurredRoomKeys.size}件</span>
@@ -805,7 +832,7 @@ export default function App() {
                   )}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>個別に削除(非表示)中のメッセージ: {hiddenMsgKeys.size}件</span>
+                  <span>個別に削除中のメッセージ: {hiddenMsgKeys.size}件</span>
                   {hiddenMsgKeys.size > 0 && (
                     <button onClick={() => setHiddenMsgKeys(new Set())} style={{ background: '#f0f0f0', border: '1px solid #ccc', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
                       すべて再表示
