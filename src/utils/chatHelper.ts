@@ -1,4 +1,22 @@
-import { User, Room, LineUser, LineChat } from '../types/chat';
+/**
+ * オブジェクトから大文字・小文字を無視して値を取得するヘルパー
+ */
+const getValueIgnoreCase = (obj: any, keys: string[]): any => {
+  if (!obj || typeof obj !== 'object') return null;
+  
+  const lowerObjKeys = Object.keys(obj).reduce((acc: any, key) => {
+    acc[key.toLowerCase()] = obj[key];
+    return acc;
+  }, {});
+
+  for (const key of keys) {
+    const val = lowerObjKeys[key.toLowerCase()];
+    if (val !== undefined && val !== null && val !== '') {
+      return val;
+    }
+  }
+  return null;
+};
 
 export const isSameUserId = (id1: any, id2: any): boolean => {
   if (id1 === undefined || id1 === null || id2 === undefined || id2 === null) return false;
@@ -6,33 +24,47 @@ export const isSameUserId = (id1: any, id2: any): boolean => {
 };
 
 /**
- * トーク相手（自分以外のメンバー）を取得する
+ * トーク相手（自分以外のユーザー）のオブジェクトを取得
  */
 export const getPartnerUser = (room: any, currentUserId: string): any => {
-  if (!room || !room.members || !Array.isArray(room.members)) return null;
+  if (!room) return null;
 
-  return room.members.find((member: any) => {
-    const memberId = member.ZMID || member.id || member.userId;
-    return !isSameUserId(memberId, currentUserId);
-  }) || null;
+  // メンバー配列を取得
+  const members: any[] = getValueIgnoreCase(room, ['members', 'users', 'participants']) || [];
+
+  if (Array.isArray(members) && members.length > 0) {
+    const partner = members.find((m: any) => {
+      const memberId = typeof m === 'object' 
+        ? getValueIgnoreCase(m, ['ZMID', 'zmid', 'id', 'userId', 'user_id', 'uid'])
+        : m;
+      return !isSameUserId(memberId, currentUserId);
+    });
+
+    if (partner) return partner;
+  }
+
+  // room 直下に相手情報が入っている場合
+  return getValueIgnoreCase(room, ['partner', 'opponent', 'targetUser', 'otherUser']);
 };
 
 /**
- * トーク部屋名（ヘッダー名）を取得する
+ * 表示用トーク部屋名を取得
  */
 export const getRoomDisplayTitle = (room: any, currentUserId: string): string => {
   if (!room) return '読み込み中...';
 
-  // ルーム名・グループ名が存在する場合
-  if (room.ZNAME || room.title) {
-    return room.ZNAME || room.title;
+  // ルーム名・グループ名のチェック
+  const roomTitle = getValueIgnoreCase(room, ['ZNAME', 'zname', 'title', 'name', 'roomName']);
+  if (roomTitle && !getValueIgnoreCase(room, ['isSingleTalk'])) {
+    return roomTitle;
   }
 
-  // 1対1トークの場合、相手の名前を取得
+  // 1対1トーク相手の名前を取得
   const partner = getPartnerUser(room, currentUserId);
   if (partner) {
-    return partner.ZCUSTOMNAME || partner.ZNAME || partner.name || 'トーク相手';
+    const partnerName = getValueIgnoreCase(partner, ['ZCUSTOMNAME', 'zcustomname', 'custom_name', 'ZNAME', 'zname', 'name', 'displayName', 'username']);
+    if (partnerName) return partnerName;
   }
 
-  return 'トーク相手';
+  return roomTitle || 'トーク相手';
 };
