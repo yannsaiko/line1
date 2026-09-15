@@ -2,53 +2,39 @@ import React, { useState } from 'react';
 import { FileUploader } from './components/FileUploader';
 import { NormalizedChatRoom, NormalizedMessage } from './types/lineDatabase';
 
-// 文字化け完全解消：Strict UTF-8 判定 ＋ Shift_JIS (CP932) / EUC-JP / UTF-16 自動フォールバック
+// ご提示のロジックを組み込んだテキストデコーダー関数
 const readTextFile = async (file: File): Promise<string> => {
   const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
+  
+  // 試す文字コードの候補
+  const encodings = ['utf-8', 'shift_jis', 'utf-16le', 'euc-jp'];
+  let text = '';
+  let successEncoding = '';
 
-  // 1. BOM (Byte Order Mark) 判定
-  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
-    return new TextDecoder('utf-8').decode(bytes.subarray(3));
-  }
-  if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
-    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
-  }
-  if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
-    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
-  }
-
-  // 2. Strict UTF-8 判定（不正バイトがあれば即例外を投げて Shift_JIS へ移行）
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch (e) {
-    // UTF-8ではないため後続処理へ
-  }
-
-  // 3. Shift_JIS / CP932 / Windows-31J 判定（Windows・古いAndroid等のLINE出力対応）
-  try {
-    return new TextDecoder('shift_jis', { fatal: true }).decode(bytes);
-  } catch (e) {
+  // 厳密なデコード（fatal: true）を試行し、失敗したら次の文字コードへフォールバック
+  for (const enc of encodings) {
     try {
-      return new TextDecoder('shift_jis').decode(bytes);
-    } catch (e2) {}
+      const decoder = new TextDecoder(enc, { fatal: true });
+      text = decoder.decode(buffer);
+      successEncoding = enc;
+      break;
+    } catch (err) {
+      // デコードエラー時は次の文字コードを試す
+    }
   }
 
-  // 4. EUC-JP 判定
-  try {
-    return new TextDecoder('euc-jp').decode(bytes);
-  } catch (e) {}
+  // すべての厳密デコードに失敗した場合は、エラー耐性を持たせて UTF-8 で強制デコード
+  if (!text) {
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    text = decoder.decode(buffer);
+    successEncoding = 'utf-8 (fallback)';
+  }
 
-  // 5. UTF-16LE 判定
-  try {
-    return new TextDecoder('utf-16le').decode(bytes);
-  } catch (e) {}
-
-  // 最終フォールバック
-  return new TextDecoder('utf-8').decode(bytes);
+  console.log(`成功した文字コード: ${successEncoding}`);
+  return text;
 };
 
-// タイムスタンプ解析
+// タイムスタンプ・日付のパース処理
 const parseTimestamp = (rawTime: any): { timeStr: string; dateStr: string } => {
   if (rawTime === undefined || rawTime === null || rawTime === '') {
     return { timeStr: '', dateStr: '' };
@@ -108,8 +94,8 @@ export const App: React.FC = () => {
     window.print();
   };
 
-  // LINE TXT解析（iOS / Android / PC 全フォーマット完全対応）
-  const parseLineTxt = (text: string, fileName: string): NormalizedChatRoom | null => {
+  // LINE TXT解析（iOS / Android / PC 各形式に対応）
+  const parseLineChat = (text: string, fileName: string): NormalizedChatRoom | null => {
     const cleanText = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = cleanText.split('\n');
 
@@ -126,7 +112,6 @@ export const App: React.FC = () => {
       const trimmed = line.trim();
       if (!trimmed) continue;
 
-      // ヘッダー除外・トーク名取得
       if (trimmed.startsWith('[LINE]')) {
         const match = trimmed.match(/\[LINE\]\s*(.+)とのトーク履歴/);
         if (match) roomTitle = match[1];
@@ -136,7 +121,7 @@ export const App: React.FC = () => {
         continue;
       }
 
-      // 日付行検出 (例: 2023/10/24(火), 2023.10.24, 2023年10月24日)
+      // 日付行 (2023/10/24(火), 2023.10.24, 2023年10月24日)
       const dateMatch = trimmed.match(/^(\d{4}[\/\.\-年]\d{1,2}[\/\.\-月]\d{1,2}[^\t]*)/);
       if (dateMatch && !trimmed.includes('\t') && !/^\d{1,2}:\d{2}/.test(trimmed)) {
         currentDate = dateMatch[1].trim();
@@ -180,7 +165,7 @@ export const App: React.FC = () => {
         continue;
       }
 
-      // 2) スペース区切り (例: 10:15 山田太郎 おはよう)
+      // 2) スペース区切り (Android: 10:15 送信者 メッセージ)
       const spaceMatch = line.match(/^(\d{1,2}:\d{2})[\s\u3000]+([^\s\u3000]+)[\s\u3000]+(.*)$/);
       if (spaceMatch) {
         const timePart = spaceMatch[1].trim();
@@ -254,7 +239,7 @@ export const App: React.FC = () => {
     };
   };
 
-  // ファイル読み込み処理
+  // ファイル選択ハンドラー
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -266,7 +251,7 @@ export const App: React.FC = () => {
       for (const file of fileArray) {
         let parsed = false;
 
-        // SQLite DB 解析
+        // SQLite DB ファイル処理
         if (
           file.name.endsWith('.sqlite') ||
           file.name.endsWith('.sqlite3') ||
@@ -355,11 +340,11 @@ export const App: React.FC = () => {
           }
         }
 
-        // テキスト解析（文字コード全自動識別）
+        // テキストファイル処理（多重フォールバックデコーダー使用）
         if (!parsed) {
           try {
             const text = await readTextFile(file);
-            const room = parseLineTxt(text, file.name);
+            const room = parseLineChat(text, file.name);
             if (room) parsedRooms.push(room);
           } catch (txtErr) {
             console.warn('テキスト解析エラー:', txtErr);
@@ -368,7 +353,7 @@ export const App: React.FC = () => {
       }
 
       if (parsedRooms.length === 0) {
-        throw new Error('有効なトーク履歴データを読み込めませんでした。テキストファイルかDBファイルを選択してください。');
+        throw new Error('有効なトーク履歴データを読み込めませんでした。テキストファイルを選択してください。');
       }
 
       setChatRooms(parsedRooms);
