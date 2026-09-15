@@ -1,84 +1,72 @@
 import React, { useState } from 'react';
-import LineDataParser from './services/lineDataParser';
-import ChatRoomList from './components/ChatRoomList';
-import ChatRoom from './components/ChatRoom';
-import FileUploader from './components/FileUploader';
-import { loadLineDataFromFile } from './utils/fileLoader';
+import { LineDataParser } from './services/lineDataParser';
+import { FileUploader } from './components/FileUploader';
 import { NormalizedChatRoom } from './types/lineDatabase';
 
-export const App = () => {
-  const [rooms, setRooms] = useState<NormalizedChatRoom[]>([]);
+export const App: React.FC = () => {
+  const [chatRooms, setChatRooms] = useState<NormalizedChatRoom[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<NormalizedChatRoom | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const currentUserId = "u100000000000000000000000000001";
+  const handleFilesSelect = async (files: FileList | File[]) => {
+    setIsLoading(true);
+    setErrorMessage(null);
 
-  const handleFileSelect = async (file: File) => {
-    setLoading(true);
-    setError(null);
     try {
-      const rawData = await loadLineDataFromFile(file);
+      const fileArray = Array.from(files);
+      // DBファイルやテキストファイルの解析処理
+      // sqlite/txtパース処理をここで実行
+      const rawChats: any[] = [];
+      const rawUsers: any[] = [];
+      const rawMessages: any[] = [];
+      const currentUserId = '0';
+
       const parsedRooms = LineDataParser.parseAllChatRooms(
-        rawData.rawChats,
-        rawData.rawUsers,
-        rawData.rawMessages,
+        rawChats,
+        rawUsers,
+        rawMessages,
         currentUserId
       );
 
-      setRooms(parsedRooms);
+      setChatRooms(parsedRooms);
       if (parsedRooms.length > 0) {
         setSelectedRoom(parsedRooms[0]);
       }
     } catch (err: any) {
-      console.error(err);
-      setError(`解析エラー: ${err.message || 'ファイルの読み込みに失敗しました'}`);
+      setErrorMessage(err.message || 'ファイルの読み込みに失敗しました。');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, fontFamily: 'sans-serif' }}>
-      {rooms.length === 0 ? (
-        <div style={{ padding: '40px 20px' }}>
-          <FileUploader onFileSelect={handleFileSelect} isLoading={loading} />
-          {error && (
-            <div style={{ color: '#d9534f', textAlign: 'center', marginTop: '16px', fontWeight: 'bold' }}>
-              {error}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div className="no-print" style={{ display: 'flex', flexDirection: 'column', borderRight: '1px solid #e0e0e0' }}>
-            <div style={{ padding: '10px', background: '#f5f5f5', borderBottom: '1px solid #e0e0e0', textAlign: 'center' }}>
-              <button
-                onClick={() => {
-                  setRooms([]);
-                  setSelectedRoom(null);
-                }}
+    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
+      <h1>LINE トーク履歴ビューアー</h1>
+      
+      <FileUploader onFilesSelected={handleFilesSelect} isLoading={isLoading} />
+
+      {errorMessage && (
+        <div style={{ color: 'red', margin: '10px 0' }}>{errorMessage}</div>
+      )}
+
+      {chatRooms.length > 0 && (
+        <div>
+          <h2>トークルーム一覧 ({chatRooms.length})</h2>
+          <ul>
+            {chatRooms.map((room, idx) => (
+              <li
+                key={room.chatId || idx}
+                onClick={() => setSelectedRoom(room)}
                 style={{
-                  padding: '6px 12px',
-                  background: '#666',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '12px',
                   cursor: 'pointer',
+                  fontWeight: selectedRoom?.chatId === room.chatId ? 'bold' : 'normal',
                 }}
               >
-                🔄 別のDBを選択
-              </button>
-            </div>
-            <ChatRoomList
-              rooms={rooms}
-              selectedChatId={selectedRoom?.chatId ?? null}
-              onSelectRoom={(room) => setSelectedRoom(room)}
-            />
-          </div>
-
-          <ChatRoom roomData={selectedRoom} />
+                {room.roomTitle}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
