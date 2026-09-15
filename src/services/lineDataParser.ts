@@ -17,7 +17,6 @@ export class LineDataParser {
   ): NormalizedChatRoom[] {
     const userMap = new Map<string, NormalizedUser>();
 
-    // ユーザー情報のマッピング
     rawUsers.forEach((u) => {
       const mid = String(u.ZMID || u.zmid || u.Z_PK || u.z_pk || u.id || '').trim();
       if (!mid) return;
@@ -33,7 +32,6 @@ export class LineDataParser {
       });
     });
 
-    // 全メッセージの整形（自分のメッセージ・相手のメッセージ双方を含める）
     const normalizedMessages: NormalizedMessage[] = rawMessages.map((msg, index) => {
       const senderMid = String(
         msg.ZSENDER || msg.zsender || msg.ZSENDERHEADER || msg.zsenderheader || ''
@@ -66,13 +64,11 @@ export class LineDataParser {
 
     normalizedMessages.sort((a, b) => a.timestamp - b.timestamp);
 
-    // チャットルーム単位にまとめる
     const chatRooms: NormalizedChatRoom[] = (rawChats.length > 0 ? rawChats : [{ Z_PK: 1 }]).map(
       (chat) => {
         const chatId = chat.Z_PK ?? chat.z_pk ?? chat.ZMID ?? chat.zmid ?? '1';
         const chatMid = String(chat.ZMID || chat.zmid || '').trim();
 
-        // 相手ユーザーの特定
         let partnerUser: NormalizedUser | null = null;
         for (const msg of normalizedMessages) {
           if (!msg.isMyMessage && msg.senderMid && userMap.has(msg.senderMid)) {
@@ -105,3 +101,5 @@ export class LineDataParser {
     return chatRooms;
   }
 }
+
+export default LineDataParser;
