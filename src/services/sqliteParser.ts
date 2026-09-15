@@ -10,16 +10,6 @@ export class SqliteParser {
   ): NormalizedChatRoom[] {
     return LineDataParser.parseAllChatRooms(rawChats, rawUsers, rawMessages, currentUserId);
   }
-
-  public static parseChatRoom(
-    rawChat: RawZChat,
-    rawUsers: RawZUser[],
-    rawMessages: RawZMessage[],
-    currentUserId: string
-  ): NormalizedChatRoom {
-    const rooms = LineDataParser.parseAllChatRooms([rawChat], rawUsers, rawMessages, currentUserId);
-    return rooms[0];
-  }
 }
 
 export default SqliteParser;
