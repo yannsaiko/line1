@@ -54,3 +54,5 @@ export const parseLineTimestamp = (rawTime: any): ParsedDateResult => {
     isValid: true,
   };
 };
+
+export default parseLineTimestamp;
