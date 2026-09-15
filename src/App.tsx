@@ -10,7 +10,7 @@ export const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // ファイル・フォルダー解析処理
+  // 複数ファイル・フォルダーの統合解析処理
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -22,73 +22,104 @@ export const App: React.FC = () => {
       let rawMessages: any[] = [];
       let currentUserId = '0';
 
-      const dbFile = fileArray.find(
+      // 1. データベースファイル（.sqlite, .db 等）を全て抽出してマージ
+      const dbFiles = fileArray.filter(
         (f) =>
           f.name.endsWith('.sqlite') ||
           f.name.endsWith('.sqlite3') ||
           f.name.endsWith('.db') ||
-          f.name.includes('Talk')
+          f.name.includes('Talk') ||
+          f.name.includes('Chat')
       );
 
-      if (dbFile) {
-        // WASMエラーを完全に回避するため、sql.jsの動的ロードではなく、
-        // ブラウザ側で安全に処理できるリーダーまたは内蔵パーサーへフォールバックします
+      if (dbFiles.length > 0) {
         try {
           // @ts-ignore
           const initSqlJs = (await import('sql.js')).default;
-          // WASMファイルを一切読み込まずに純粋なJSモードで初期化を試みる
           const SQL = await initSqlJs({
             locateFile: () => '',
           });
-          const buffer = await dbFile.arrayBuffer();
-          const db = new SQL.Database(new Uint8Array(buffer));
 
-          try {
-            const chatRes = db.exec('SELECT * FROM ZCHAT');
-            if (chatRes.length > 0) {
-              const cols = chatRes[0].columns;
-              rawChats = chatRes[0].values.map((row) =>
-                Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-              );
+          for (const dbFile of dbFiles) {
+            try {
+              const buffer = await dbFile.arrayBuffer();
+              const db = new SQL.Database(new Uint8Array(buffer));
+
+              // ZCHAT
+              try {
+                const chatRes = db.exec('SELECT * FROM ZCHAT');
+                if (chatRes.length > 0) {
+                  const cols = chatRes[0].columns;
+                  const chats = chatRes[0].values.map((row) =>
+                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
+                  );
+                  rawChats.push(...chats);
+                }
+              } catch (e) {}
+
+              // ZUSER
+              try {
+                const userRes = db.exec('SELECT * FROM ZUSER');
+                if (userRes.length > 0) {
+                  const cols = userRes[0].columns;
+                  const users = userRes[0].values.map((row) =>
+                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
+                  );
+                  rawUsers.push(...users);
+                }
+              } catch (e) {}
+
+              // ZMESSAGE
+              try {
+                const msgRes = db.exec('SELECT * FROM ZMESSAGE');
+                if (msgRes.length > 0) {
+                  const cols = msgRes[0].columns;
+                  const msgs = msgRes[0].values.map((row) =>
+                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
+                  );
+                  rawMessages.push(...msgs);
+                }
+              } catch (e) {}
+
+              db.close();
+            } catch (dbErr) {
+              console.warn(`Failed to parse DB: ${dbFile.name}`, dbErr);
             }
-          } catch (e) {
-            console.warn('ZCHAT table not found', e);
           }
-
-          try {
-            const userRes = db.exec('SELECT * FROM ZUSER');
-            if (userRes.length > 0) {
-              const cols = userRes[0].columns;
-              rawUsers = userRes[0].values.map((row) =>
-                Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-              );
-            }
-          } catch (e) {
-            console.warn('ZUSER table not found', e);
-          }
-
-          try {
-            const msgRes = db.exec('SELECT * FROM ZMESSAGE');
-            if (msgRes.length > 0) {
-              const cols = msgRes[0].columns;
-              rawMessages = msgRes[0].values.map((row) =>
-                Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-              );
-            }
-          } catch (e) {
-            console.warn('ZMESSAGE table not found', e);
-          }
-
-          db.close();
         } catch (wasmErr) {
-          console.warn('SQLite WASM could not be initialized, switching to text/fallback parser', wasmErr);
-          // SQLiteとして読めない場合はテキストファイル等として読み込みを試行
-          for (const file of fileArray) {
-            const text = await file.text();
-            if (text.includes(' [') || text.includes('\t')) {
-              // 簡易テキストパーサー用の処理など
+          console.warn('SQLite initialization skipped, falling back to text parsers', wasmErr);
+        }
+      }
+
+      // 2. テキストファイル（.txt）が複数ある場合も全て読み込んで統合
+      const txtFiles = fileArray.filter((f) => f.name.endsWith('.txt'));
+      for (const txtFile of txtFiles) {
+        try {
+          const text = await txtFile.text();
+          const lines = text.split('\n');
+          const roomTitle = txtFile.name.replace(/\.[^/.]+$/, '');
+          
+          let fileMessages: any[] = [];
+          lines.forEach((line, idx) => {
+            const parts = line.split('\t');
+            if (parts.length >= 3) {
+              fileMessages.push({
+                Z_PK: `txt_${txtFile.name}_${idx}`,
+                ZTEXT: parts[2],
+                ZSENDER: parts[1],
+                ZCREATEDTIME: Date.parse(parts[0]) || Date.now(),
+              });
+            } else if (line.trim() !== '' && fileMessages.length > 0) {
+              fileMessages[fileMessages.length - 1].ZTEXT += '\n' + line;
             }
+          });
+
+          if (fileMessages.length > 0) {
+            rawChats.push({ Z_PK: roomTitle, ZNAME: roomTitle });
+            rawMessages.push(...fileMessages);
           }
+        } catch (txtErr) {
+          console.warn(`Failed to parse text file: ${txtFile.name}`, txtErr);
         }
       }
 
@@ -100,7 +131,7 @@ export const App: React.FC = () => {
       );
 
       if (parsedRooms.length === 0) {
-        throw new Error('有効なトーク履歴データが見つかりませんでした。正しいファイルかご確認ください。');
+        throw new Error('選択されたファイルから有効なトーク履歴が見つかりませんでした。');
       }
 
       setChatRooms(parsedRooms);
@@ -147,7 +178,7 @@ export const App: React.FC = () => {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {filteredRooms.length === 0 ? (
               <div style={{ padding: '20px', color: '#888', textAlign: 'center', fontSize: '14px' }}>
-                {chatRooms.length === 0 ? 'ファイルまたはフォルダを選択してください' : '該当するトークがありません'}
+                {chatRooms.length === 0 ? 'ファイルまたはフォルダーを選択してください' : '該当するトークがありません'}
               </div>
             ) : (
               filteredRooms.map((room) => {
