@@ -1,91 +1,31 @@
-import {
-  RawZUser,
-  RawZMessage,
-  RawZChat,
-  NormalizedUser,
-  NormalizedMessage,
-  NormalizedChatRoom,
-} from '../types/lineDatabase';
-import { parseLineTimestamp } from '../utils/lineTimestampParser';
+import { LineDataParser } from './lineDataParser';
+import { RawZUser, RawZMessage, RawZChat, NormalizedChatRoom } from '../types/lineDatabase';
 
 export class SqliteParser {
-  /**
-   * チャットルームデータを構築し、不足しているフィールドを自動補完
-   */
   public static buildChatRoom(
     rawChat: RawZChat,
     rawUsers: RawZUser[],
     rawMessages: RawZMessage[],
     currentUserId: string
   ): NormalizedChatRoom {
-    const userMap = new Map<string, NormalizedUser>();
-
-    rawUsers.forEach((u) => {
-      const mid = String(u.ZMID || u.zmid || u.id || '').trim();
-      if (!mid) return;
-      const customName = u.ZCUSTOMNAME || u.zcustomname;
-      const name = u.ZNAME || u.zname || u.name;
-      userMap.set(mid, {
-        mid,
-        displayName: name || '',
-        customName: customName || undefined,
-        resolvedName: customName || name || `ユーザー(${mid.slice(0, 6)})`,
-      });
-    });
-
-    const normalizedMessages: NormalizedMessage[] = rawMessages.map((msg, index) => {
-      const senderMid = String(
-        msg.ZSENDER || msg.zsender || msg.ZSENDERHEADER || msg.zsenderheader || ''
-      ).trim();
-
-      const isMyMessage = senderMid === String(currentUserId).trim();
-      let senderName = 'トーク相手';
-      if (isMyMessage) {
-        senderName = '自分';
-      } else if (userMap.has(senderMid)) {
-        senderName = userMap.get(senderMid)!.resolvedName;
-      }
-
-      const rawTime = msg.ZCREATEDTIME ?? msg.zcreatedtime;
-      const parsedTime = parseLineTimestamp(rawTime);
-
-      return {
-        id: msg.Z_PK || msg.z_pk || index,
-        text: msg.ZTEXT || msg.ztext || '',
-        senderMid,
-        senderName,
-        timestamp: parsedTime.timestamp,
-        formattedTime: parsedTime.formattedTime,
-        formattedFullDate: parsedTime.formattedFullDate,
-        isMyMessage,
-      };
-    });
-
-    normalizedMessages.sort((a, b) => a.timestamp - b.timestamp);
-
-    let partnerUser: NormalizedUser | null = null;
-    for (const msg of normalizedMessages) {
-      if (!msg.isMyMessage && userMap.has(msg.senderMid)) {
-        partnerUser = userMap.get(msg.senderMid)!;
-        break;
-      }
+    const rooms = LineDataParser.parseAllChatRooms([rawChat], rawUsers, rawMessages, currentUserId);
+    if (rooms.length > 0) {
+      return rooms[0];
     }
 
     const chatId = rawChat.Z_PK ?? rawChat.z_pk ?? rawChat.ZMID ?? rawChat.zmid ?? '0';
     const chatMid = String(rawChat.ZMID || rawChat.zmid || '').trim();
-    const roomTitle = rawChat.ZNAME || rawChat.zname || partnerUser?.resolvedName || 'トーク相手';
-    const lastMsg = normalizedMessages[normalizedMessages.length - 1];
+    const roomTitle = rawChat.ZNAME || rawChat.zname || 'トーク相手';
 
-    // 全ての型定義を満たすオブジェクトを返す
     return {
       chatId,
       chatMid,
       roomTitle,
-      partner: partnerUser,
-      messages: normalizedMessages,
-      lastMessageText: lastMsg ? lastMsg.text : '',
-      lastMessageTime: lastMsg ? lastMsg.formattedTime : '',
-      lastTimestamp: lastMsg ? lastMsg.timestamp : 0,
+      partner: null,
+      messages: [],
+      lastMessageText: '',
+      lastMessageTime: '',
+      lastTimestamp: 0,
     };
   }
 
@@ -96,6 +36,15 @@ export class SqliteParser {
     currentUserId: string
   ): NormalizedChatRoom {
     return this.buildChatRoom(rawChat, rawUsers, rawMessages, currentUserId);
+  }
+
+  public static parseAllChatRooms(
+    rawChats: RawZChat[],
+    rawUsers: RawZUser[],
+    rawMessages: RawZMessage[],
+    currentUserId: string
+  ): NormalizedChatRoom[] {
+    return LineDataParser.parseAllChatRooms(rawChats, rawUsers, rawMessages, currentUserId);
   }
 }
 
