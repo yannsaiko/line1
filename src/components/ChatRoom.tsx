@@ -30,7 +30,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
         }
       `}</style>
 
-      {/* ヘッダー / 印刷ボタン */}
       <header
         className="no-print"
         style={{
@@ -38,7 +37,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
           color: '#ffffff',
           padding: '12px 20px',
           display: 'flex',
-          justify: 'space-between',
+          justifyContent: 'space-between',
           alignItems: 'center',
           borderBottom: '1px solid #1e2529',
         }}
@@ -62,7 +61,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
         </button>
       </header>
 
-      {/* メッセージ表示エリア */}
       <div
         className="print-container"
         style={{
@@ -84,7 +82,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
               alignItems: msg.isMyMessage ? 'flex-end' : 'flex-start',
             }}
           >
-            {/* 相手の名前 */}
             {!msg.isMyMessage && (
               <span style={{ fontSize: '12px', color: '#ffffff', marginBottom: '4px', fontWeight: 'bold' }}>
                 {msg.senderName}
@@ -100,7 +97,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
                 maxWidth: '75%',
               }}
             >
-              {/* メッセージ本文 */}
               <div
                 style={{
                   background: msg.isMyMessage ? '#85E249' : '#FFFFFF',
@@ -117,7 +113,6 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
                 {msg.text}
               </div>
 
-              {/* 送信日時（時刻） */}
               <span style={{ fontSize: '11px', color: '#e8f0fe', whiteSpace: 'nowrap', marginBottom: '2px' }}>
                 {msg.formattedTime}
               </span>
