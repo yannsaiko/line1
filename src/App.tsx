@@ -2,6 +2,49 @@ import React, { useState } from 'react';
 import { FileUploader } from './components/FileUploader';
 import { NormalizedChatRoom, NormalizedMessage } from './types/lineDatabase';
 
+// 文字化け対策（UTF-8 と Shift_JIS を自動判別デコード）
+const readTextFile = async (file: File): Promise<string> => {
+  const buffer = await file.arrayBuffer();
+  let text = new TextDecoder('utf-8').decode(buffer);
+  if (text.includes('\uFFFD')) {
+    try {
+      const sjisText = new TextDecoder('shift-jis').decode(buffer);
+      if (!sjisText.includes('\uFFFD')) {
+        text = sjisText;
+      }
+    } catch (e) {}
+  }
+  return text;
+};
+
+// 送信時刻・日付の抽出処理
+const parseTimestamp = (rawTime: any): { timeStr: string; dateStr: string } => {
+  if (rawTime === undefined || rawTime === null || rawTime === '') {
+    return { timeStr: '', dateStr: '' };
+  }
+  let num = Number(rawTime);
+  if (!isNaN(num) && num > 0) {
+    // Apple Core Data Epoch (2001-01-01基準の秒数) の変換対応
+    if (num < 1000000000) {
+      num = (num + 978307200) * 1000;
+    } else if (num < 100000000000) {
+      num = num * 1000;
+    }
+    const d = new Date(num);
+    if (!isNaN(d.getTime())) {
+      const hours = String(d.getHours()).padStart(2, '0');
+      const mins = String(d.getMinutes()).padStart(2, '0');
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return { timeStr: `${hours}:${mins}`, dateStr: `${year}/${month}/${day}` };
+    }
+  }
+  const str = String(rawTime).trim();
+  const timeMatch = str.match(/(\d{1,2}:\d{2})/);
+  return { timeStr: timeMatch ? timeMatch[1] : str, dateStr: '' };
+};
+
 export const App: React.FC = () => {
   const [chatRooms, setChatRooms] = useState<NormalizedChatRoom[]>([]);
   const [selectedRoom, setSelectedRoom] = useState<NormalizedChatRoom | null>(null);
@@ -9,11 +52,10 @@ export const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // 編集状態（モザイク・非表示）
+  // 編集状態
   const [blurredMsgIds, setBlurredMsgIds] = useState<Set<string | number>>(new Set());
   const [deletedMsgIds, setDeletedMsgIds] = useState<Set<string | number>>(new Set());
 
-  // モザイク切り替え
   const toggleBlur = (id: string | number) => {
     setBlurredMsgIds((prev) => {
       const next = new Set(prev);
@@ -23,7 +65,6 @@ export const App: React.FC = () => {
     });
   };
 
-  // メッセージ非表示（削除）
   const deleteMessage = (id: string | number) => {
     setDeletedMsgIds((prev) => {
       const next = new Set(prev);
@@ -32,19 +73,14 @@ export const App: React.FC = () => {
     });
   };
 
-  // 印刷実行
   const handlePrint = () => {
     window.print();
   };
 
-  // 究極の超柔軟テキスト解析（iOS / Android / PC / 各種記述フォーマットに対応）
+  // LINE TXT解析（iOS / Android / PC全対応）
   const parseLineTxt = (text: string, fileName: string): NormalizedChatRoom | null => {
     const lines = text.split(/\r?\n/);
-    let roomTitle = fileName
-      .replace(/\.[^/.]+$/, '')
-      .replace(/^\[LINE\]\s*/, '')
-      .replace(/とのトーク履歴$/, '');
-
+    let roomTitle = fileName.replace(/\.[^/.]+$/, '').replace(/^\[LINE\]\s*/, '').replace(/とのトーク履歴$/, '');
     const messages: NormalizedMessage[] = [];
     let currentDate = '';
 
@@ -53,67 +89,80 @@ export const App: React.FC = () => {
       const trimmed = line.trim();
       if (!trimmed) continue;
 
-      // タイトル行検出
+      // ヘッダー・タイトル
       if (trimmed.startsWith('[LINE]')) {
         const match = trimmed.match(/\[LINE\]\s*(.+)とのトーク履歴/);
         if (match) roomTitle = match[1];
         continue;
       }
-
-      // ヘッダー除外
       if (trimmed.startsWith('保存日時：') || trimmed.startsWith('保存日時:')) continue;
 
-      // 日付行 (例: 2023/10/24(火), 2023.10.24, 2023年10月24日)
-      if (/^\d{4}[\/\.\-年]\d{1,2}[\/\.\-月]\d{1,2}/.test(trimmed)) {
-        currentDate = trimmed;
+      // 日付行 (2023/10/24(火), 2023.10.24 等)
+      const dateMatch = trimmed.match(/^(\d{4}[\/\.\-年]\d{1,2}[\/\.\-月]\d{1,2}[^\s\t]*)/);
+      if (dateMatch && !trimmed.includes('\t')) {
+        currentDate = dateMatch[1];
         continue;
       }
 
-      // 1) タブ区切り判定 (\t)
+      // 1) タブ区切り (HH:mm\t送信者\tメッセージ)
       const tabParts = line.split('\t');
       if (tabParts.length >= 3) {
+        const timePart = tabParts[0].trim();
+        const senderPart = tabParts[1].trim();
+        const textPart = tabParts.slice(2).join('\t');
+        const isMyMsg = senderPart === '自分' || senderPart === 'Me';
+
         messages.push({
           id: `txt_${fileName}_${i}`,
-          text: tabParts.slice(2).join('\t'),
-          senderMid: tabParts[1],
-          senderName: tabParts[1],
+          text: textPart,
+          senderMid: senderPart,
+          senderName: senderPart,
           timestamp: i,
-          formattedTime: tabParts[0],
+          formattedTime: timePart,
           formattedFullDate: currentDate,
-          isMyMessage: tabParts[1] === '自分' || tabParts[1] === 'Me',
+          isMyMessage: isMyMsg,
         });
         continue;
       } else if (tabParts.length === 2) {
+        const senderPart = tabParts[0].trim();
+        const textPart = tabParts[1];
+        const isMyMsg = senderPart === '自分' || senderPart === 'Me';
+
         messages.push({
           id: `txt_${fileName}_${i}`,
-          text: tabParts[1],
-          senderMid: tabParts[0],
-          senderName: tabParts[0],
+          text: textPart,
+          senderMid: senderPart,
+          senderName: senderPart,
           timestamp: i,
           formattedTime: '',
           formattedFullDate: currentDate,
-          isMyMessage: tabParts[0] === '自分' || tabParts[0] === 'Me',
+          isMyMessage: isMyMsg,
         });
         continue;
       }
 
-      // 2) 複数スペースまたはコロン区切り判定 (Android/他フォーマット)
+      // 2) スペース区切り (Android等: 12:34 送信者 メッセージ)
       const spaceParts = line.split(/\s{2,}/);
       if (spaceParts.length >= 3) {
+        const timePart = spaceParts[0].trim();
+        const senderPart = spaceParts[1].trim();
+        const textPart = spaceParts.slice(2).join(' ');
+        const isMyMsg = senderPart === '自分' || senderPart === 'Me';
+
         messages.push({
           id: `txt_${fileName}_${i}`,
-          text: spaceParts.slice(2).join(' '),
-          senderMid: spaceParts[1],
-          senderName: spaceParts[1],
+          text: textPart,
+          senderMid: senderPart,
+          senderName: senderPart,
           timestamp: i,
-          formattedTime: spaceParts[0],
+          formattedTime: timePart,
           formattedFullDate: currentDate,
-          isMyMessage: spaceParts[1] === '自分' || spaceParts[1] === 'Me',
+          isMyMessage: isMyMsg,
         });
         continue;
       }
 
-      // 3) 複数行メッセージの結合または標準テキスト行としての救済
+      // 3) 改行メッセージの継続処理
       if (messages.length > 0) {
         messages[messages.length - 1].text += '\n' + line;
       } else {
@@ -144,7 +193,7 @@ export const App: React.FC = () => {
     };
   };
 
-  // ファイル読み込み・全自動フォールバック処理
+  // ファイル読み込み処理
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -156,7 +205,7 @@ export const App: React.FC = () => {
       for (const file of fileArray) {
         let parsed = false;
 
-        // 1. SQLiteとしての解析を試行
+        // 1. SQLite DB の解析
         if (
           file.name.endsWith('.sqlite') ||
           file.name.endsWith('.sqlite3') ||
@@ -176,23 +225,57 @@ export const App: React.FC = () => {
             const tablesRes = db.exec("SELECT name FROM sqlite_master WHERE type='table';");
             const tables = tablesRes.length > 0 ? tablesRes[0].values.map((v) => String(v[0])) : [];
 
+            // ユーザーテーブル
+            const userMap = new Map<string, string>();
+            const userTable = tables.find((t) => t.toLowerCase().includes('user') || t.toLowerCase().includes('contact'));
+            if (userTable) {
+              const uRes = db.exec(`SELECT * FROM "${userTable}"`);
+              if (uRes.length > 0) {
+                const cols = uRes[0].columns;
+                uRes[0].values.forEach((row) => {
+                  const uObj = Object.fromEntries(cols.map((c, i) => [c, row[i]]));
+                  const mid = String(uObj.ZMID || uObj.zmid || uObj.Z_PK || uObj.id || '');
+                  const name = String(uObj.ZCUSTOMNAME || uObj.zcustomname || uObj.ZNAME || uObj.zname || '');
+                  if (mid && name) userMap.set(mid, name);
+                });
+              }
+            }
+
+            // メッセージテーブル
             const msgTable = tables.find((t) => t.toLowerCase().includes('message') || t.toLowerCase().includes('chatlog'));
             if (msgTable) {
               const res = db.exec(`SELECT * FROM "${msgTable}"`);
               if (res.length > 0) {
                 const cols = res[0].columns;
                 const rows = res[0].values.map((row) => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
-                
-                const msgs: NormalizedMessage[] = rows.map((r: any, idx) => ({
-                  id: r.Z_PK || r.id || idx,
-                  text: r.ZTEXT || r.ztext || r.text || '',
-                  senderMid: String(r.ZSENDER || r.zsender || ''),
-                  senderName: r.ZSENDER || r.zsender ? '相手' : '自分',
-                  timestamp: idx,
-                  formattedTime: '',
-                  formattedFullDate: '',
-                  isMyMessage: !r.ZSENDER && !r.zsender,
-                }));
+
+                const msgs: NormalizedMessage[] = rows.map((r: any, idx) => {
+                  const senderMid = String(r.ZSENDER || r.zsender || r.ZSENDERHEADER || r.zsenderheader || '').trim();
+                  const rawTime = r.ZCREATEDTIME ?? r.zcreatedtime ?? r.ZDATE ?? r.zdate ?? r.timestamp;
+                  const timeInfo = parseTimestamp(rawTime);
+
+                  const isMyMsg =
+                    !senderMid ||
+                    senderMid === '0' ||
+                    String(r.ZISFROMME || r.zisfromme || '') === '1' ||
+                    String(r.ZISFROMME || r.zisfromme || '').toLowerCase() === 'true';
+
+                  let senderName = isMyMsg ? '自分' : '相手';
+                  if (!isMyMsg && userMap.has(senderMid)) {
+                    senderName = userMap.get(senderMid)!;
+                  }
+
+                  return {
+                    id: r.Z_PK || r.id || idx,
+                    text: String(r.ZTEXT || r.ztext || r.ZBODY || r.zbody || r.text || ''),
+                    senderMid,
+                    senderName,
+                    timestamp: idx,
+                    formattedTime: timeInfo.timeStr,
+                    formattedFullDate: timeInfo.dateStr,
+                    isMyMessage: isMyMsg,
+                  };
+                });
 
                 parsedRooms.push({
                   chatId: file.name,
@@ -201,7 +284,7 @@ export const App: React.FC = () => {
                   partner: null,
                   messages: msgs,
                   lastMessageText: msgs[msgs.length - 1]?.text || '',
-                  lastMessageTime: '',
+                  lastMessageTime: msgs[msgs.length - 1]?.formattedTime || '',
                   lastTimestamp: msgs.length,
                 });
                 parsed = true;
@@ -209,26 +292,24 @@ export const App: React.FC = () => {
             }
             db.close();
           } catch (dbErr) {
-            console.warn('DB解析スキップ、テキストモードへフォールバック:', dbErr);
+            console.warn('DB parsing skipped, falling back to text mode', dbErr);
           }
         }
 
-        // 2. テキストパーサーによる救済（DB解析非対象、またはDB解析失敗時）
+        // 2. テキスト読み込み（UTF-8 & Shift_JIS エンコーディング両対応）
         if (!parsed) {
           try {
-            const text = await file.text();
+            const text = await readTextFile(file);
             const room = parseLineTxt(text, file.name);
-            if (room) {
-              parsedRooms.push(room);
-            }
+            if (room) parsedRooms.push(room);
           } catch (txtErr) {
-            console.warn('テキスト解析エラー:', txtErr);
+            console.warn('Text parsing error', txtErr);
           }
         }
       }
 
       if (parsedRooms.length === 0) {
-        throw new Error('ファイルを読み込めませんでした。文字が入っているテキストファイルを選択してください。');
+        throw new Error('有効なトーク履歴データを読み込めませんでした。');
       }
 
       setChatRooms(parsedRooms);
@@ -253,7 +334,6 @@ export const App: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', backgroundColor: '#f5f6f8' }}>
-      {/* 印刷用CSS */}
       <style>{`
         @media print {
           .no-print { display: none !important; }
@@ -338,7 +418,7 @@ export const App: React.FC = () => {
               <div style={{ backgroundColor: '#fff', padding: '14px 20px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold', fontSize: '16px', color: '#333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>{selectedRoom.roomTitle}</span>
                 <span className="no-print" style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
-                  ※各吹き出しの「モザイク」「削除」で個別編集できます
+                  ※モザイク・削除で個別編集可能
                 </span>
               </div>
 
@@ -364,11 +444,10 @@ export const App: React.FC = () => {
                           </div>
                         )}
 
-                        {!msg.isMyMessage && (
-                          <span style={{ fontSize: '12px', color: '#fff', marginBottom: '3px', marginLeft: '4px' }}>
-                            {msg.senderName}
-                          </span>
-                        )}
+                        {/* 送信者名表示 */}
+                        <span style={{ fontSize: '12px', color: '#fff', marginBottom: '3px', marginLeft: msg.isMyMessage ? '0' : '4px', marginRight: msg.isMyMessage ? '4px' : '0' }}>
+                          {msg.senderName}
+                        </span>
 
                         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', flexDirection: msg.isMyMessage ? 'row-reverse' : 'row' }}>
                           {/* 吹き出し */}
@@ -393,8 +472,9 @@ export const App: React.FC = () => {
                           </div>
 
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: msg.isMyMessage ? 'flex-end' : 'flex-start', gap: '2px' }}>
+                            {/* 送信時刻表示 */}
                             <span style={{ fontSize: '11px', color: '#e0e0e0', flexShrink: 0 }}>
-                              {msg.formattedTime}
+                              {msg.formattedTime || ''}
                             </span>
 
                             {/* 操作ボタン */}
