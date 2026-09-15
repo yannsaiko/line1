@@ -3,7 +3,7 @@ import initSqlJs from 'sql.js/dist/sql-asm.js';
 import { RawZChat, RawZUser, RawZMessage } from '../types/lineDatabase';
 
 export interface ParsedLineRawData {
-  rawChat: RawZChat;
+  rawChats: RawZChat[];
   rawUsers: RawZUser[];
   rawMessages: RawZMessage[];
 }
@@ -27,28 +27,41 @@ export const loadLineDataFromFile = async (file: File): Promise<ParsedLineRawDat
     const text = await file.text();
     const data = JSON.parse(text);
     return {
-      rawChat: data.rawChat || data.ZCHAT || data.zchat || {},
-      rawUsers: data.rawUsers || data.ZUSER || data.zuser || [],
-      rawMessages: data.rawMessages || data.ZMESSAGE || data.zmessage || [],
+      rawChats: data.rawChats || data.ZCHAT || (data.rawChat ? [data.rawChat] : []),
+      rawUsers: data.rawUsers || data.ZUSER || [],
+      rawMessages: data.rawMessages || data.ZMESSAGE || [],
     };
   }
 
-  // locateFile 不要で動きます
   const SQL = await initSqlJs();
-
   const arrayBuffer = await file.arrayBuffer();
   const db = new SQL.Database(new Uint8Array(arrayBuffer));
 
-  const chatRes = db.exec("SELECT * FROM ZCHAT LIMIT 1;");
-  const rawChat: RawZChat = chatRes.length > 0 ? statementToObjects(chatRes[0])[0] || {} : {};
+  let rawChats: RawZChat[] = [];
+  try {
+    const chatRes = db.exec("SELECT * FROM ZCHAT;");
+    if (chatRes.length > 0) rawChats = statementToObjects(chatRes[0]);
+  } catch (e) {
+    console.warn("ZCHAT table not found", e);
+  }
 
-  const userRes = db.exec("SELECT * FROM ZUSER;");
-  const rawUsers: RawZUser[] = userRes.length > 0 ? statementToObjects(userRes[0]) : [];
+  let rawUsers: RawZUser[] = [];
+  try {
+    const userRes = db.exec("SELECT * FROM ZUSER;");
+    if (userRes.length > 0) rawUsers = statementToObjects(userRes[0]);
+  } catch (e) {
+    console.warn("ZUSER table not found", e);
+  }
 
-  const msgRes = db.exec("SELECT * FROM ZMESSAGE;");
-  const rawMessages: RawZMessage[] = msgRes.length > 0 ? statementToObjects(msgRes[0]) : [];
+  let rawMessages: RawZMessage[] = [];
+  try {
+    const msgRes = db.exec("SELECT * FROM ZMESSAGE;");
+    if (msgRes.length > 0) rawMessages = statementToObjects(msgRes[0]);
+  } catch (e) {
+    console.warn("ZMESSAGE table not found", e);
+  }
 
   db.close();
 
-  return { rawChat, rawUsers, rawMessages };
+  return { rawChats, rawUsers, rawMessages };
 };
