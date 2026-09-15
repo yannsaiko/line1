@@ -11,7 +11,6 @@ export const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // SQLite DB または TXT ファイルの解析
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -23,7 +22,6 @@ export const App: React.FC = () => {
       let rawMessages: any[] = [];
       let currentUserId = '0';
 
-      // SQLite DBファイルを検索
       const dbFile = fileArray.find(
         (f) =>
           f.name.endsWith('.sqlite') ||
@@ -33,14 +31,13 @@ export const App: React.FC = () => {
       );
 
       if (dbFile) {
-        // 自サーバー（publicディレクトリ）から WASM を読み込む
+        // cdnjs から WASM を安定してロード
         const SQL = await initSqlJs({
-          locateFile: (file) => `${process.env.PUBLIC_URL || ''}/${file}`,
+          locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`,
         });
         const buffer = await dbFile.arrayBuffer();
         const db = new SQL.Database(new Uint8Array(buffer));
 
-        // ZCHAT テーブル取得
         try {
           const chatRes = db.exec('SELECT * FROM ZCHAT');
           if (chatRes.length > 0) {
@@ -53,7 +50,6 @@ export const App: React.FC = () => {
           console.warn('ZCHAT table not found', e);
         }
 
-        // ZUSER テーブル取得
         try {
           const userRes = db.exec('SELECT * FROM ZUSER');
           if (userRes.length > 0) {
@@ -66,7 +62,6 @@ export const App: React.FC = () => {
           console.warn('ZUSER table not found', e);
         }
 
-        // ZMESSAGE テーブル取得
         try {
           const msgRes = db.exec('SELECT * FROM ZMESSAGE');
           if (msgRes.length > 0) {
@@ -103,7 +98,6 @@ export const App: React.FC = () => {
     }
   };
 
-  // 検索フィルタリング
   const filteredRooms = chatRooms.filter(
     (room) =>
       room.roomTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -112,7 +106,6 @@ export const App: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', backgroundColor: '#f5f6f8' }}>
-      {/* ヘッダー */}
       <header style={{ backgroundColor: '#06C755', color: '#fff', padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>LINE トーク履歴ビューアー</h1>
         <FileUploader onFilesSelected={handleFilesSelected} isLoading={isLoading} />
@@ -124,9 +117,7 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 2カラムレイアウト */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* 左: サイドバー */}
         <aside style={{ width: '320px', borderRight: '1px solid #e0e0e0', backgroundColor: '#fff', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '12px', borderBottom: '1px solid #f0f0f0' }}>
             <input
@@ -170,7 +161,6 @@ export const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* 右: チャット画面 */}
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#7494C0' }}>
           {selectedRoom ? (
             <>
