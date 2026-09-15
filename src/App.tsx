@@ -1,37 +1,72 @@
-import React, { useMemo } from 'react';
+import React, { useState } from 'react';
 import { LineDataParser } from './services/lineDataParser';
 import ChatRoom from './components/ChatRoom';
+import FileUploader from './components/FileUploader';
+import { loadLineDataFromFile } from './utils/fileLoader';
+import { NormalizedChatRoom } from './types/lineDatabase';
 
 export const App = () => {
-  const currentUserId = "u1000000000000000000000000000001";
+  const [roomData, setRoomData] = useState<NormalizedChatRoom | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const rawZChat = { ZMID: "u2000000000000000000000000000002", ZNAME: "" };
+  const currentUserId = "u100000000000000000000000000001";
 
-  const rawZUsers = [
-    { ZMID: "u1000000000000000000000000000001", ZNAME: "自分" },
-    { ZMID: "u2000000000000000000000000000002", ZNAME: "佐藤 健", ZCUSTOMNAME: "佐藤健（仕事用）" }
-  ];
-
-  const rawZMessages = [
-    {
-      Z_PK: 101,
-      ZSENDER: "u2000000000000000000000000000002",
-      ZTEXT: "お疲れ様です。明日のミーティングの件です。",
-      ZCREATEDTIME: 748161000
-    },
-    {
-      Z_PK: 102,
-      ZSENDER: "u1000000000000000000000000000001",
-      ZTEXT: "了解いたしました！14時に参加いたします。",
-      ZCREATEDTIME: 1726383060000
+  const handleFileSelect = async (file: File) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const rawData = await loadLineDataFromFile(file);
+      const parsed = LineDataParser.parseChatRoom(
+        rawData.rawChat,
+        rawData.rawUsers,
+        rawData.rawMessages,
+        currentUserId
+      );
+      setRoomData(parsed);
+    } catch (err: any) {
+      console.error(err);
+      setError(`解析エラー: ${err.message || 'ファイルの読み込みに失敗しました'}`);
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
 
-  const parsedRoom = useMemo(() => {
-    return LineDataParser.parseChatRoom(rawZChat, rawZUsers, rawZMessages, currentUserId);
-  }, [rawZChat, rawZUsers, rawZMessages, currentUserId]);
+  return (
+    <div style={{ padding: '20px' }}>
+      {!roomData && (
+        <FileUploader onFileSelect={handleFileSelect} isLoading={loading} />
+      )}
 
-  return <ChatRoom roomData={parsedRoom} />;
+      {error && (
+        <div style={{ color: '#d9534f', textAlign: 'center', margin: '16px 0', fontWeight: 'bold' }}>
+          {error}
+        </div>
+      )}
+
+      {roomData && (
+        <div>
+          <div className="no-print" style={{ textAlign: 'center', marginBottom: '16px' }}>
+            <button
+              onClick={() => setRoomData(null)}
+              style={{
+                padding: '8px 16px',
+                background: '#666666',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              🔄 別のファイルを読み込む
+            </button>
+          </div>
+          <ChatRoom roomData={roomData} />
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default App;
