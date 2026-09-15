@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { LineDataParser } from './services/lineDataParser';
-import { ChatRoom } from './components/ChatRoom';
+import ChatRoom from './components/ChatRoom';
 
 export const App = () => {
   const currentUserId = "u1000000000000000000000000000001";
