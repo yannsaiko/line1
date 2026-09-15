@@ -9,7 +9,7 @@ export const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleFilesSelect = async (files: FileList | File[]) => {
+  const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
 
@@ -41,7 +41,7 @@ export const App: React.FC = () => {
     <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
       <h1>LINE トーク履歴ビューアー</h1>
 
-      <FileUploader onFilesSelected={handleFilesSelect} isLoading={isLoading} />
+      <FileUploader onFilesSelected={handleFilesSelected} isLoading={isLoading} />
 
       {errorMessage && (
         <div style={{ color: 'red', margin: '10px 0' }}>{errorMessage}</div>
