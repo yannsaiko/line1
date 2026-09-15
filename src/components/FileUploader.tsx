@@ -42,54 +42,36 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect, isLoad
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onClick={() => fileInputRef.current?.click()}
       style={{
         border: isDragOver ? '2px dashed #06C755' : '2px dashed #cccccc',
-        borderRadius: '16px',
-        padding: '36px 20px',
+        borderRadius: '12px',
+        padding: '40px 20px',
         textAlign: 'center',
         backgroundColor: isDragOver ? 'rgba(6, 199, 85, 0.05)' : '#ffffff',
+        cursor: 'pointer',
         transition: 'all 0.2s ease',
         margin: '20px auto',
         maxWidth: '600px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
       }}
     >
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept=".sqlite,.db,.sqlite3,.json"
+        accept=".sqlite,.db,.json"
         style={{ display: 'none' }}
       />
-
-      <div style={{ fontSize: '48px', marginBottom: '12px' }}>🗄️</div>
-      <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', color: '#333333', fontWeight: 'bold' }}>
-        SQLite DB ファイル（.sqlite / .db）または JSON をドロップ
+      <div style={{ fontSize: '48px', marginBottom: '12px' }}>📁</div>
+      <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', color: '#333333' }}>
+        Line.sqlite または JSON ファイルをドロップ
       </h3>
-      <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#666666' }}>
-        sql.js (WASM) によりブラウザ内で SQLite データベースをパースします
+      <p style={{ margin: 0, fontSize: '14px', color: '#666666' }}>
+        またはクリックしてファイルを選択してください
       </p>
-
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        style={{
-          padding: '10px 24px',
-          backgroundColor: '#06C755',
-          color: '#ffffff',
-          border: 'none',
-          borderRadius: '8px',
-          fontWeight: 'bold',
-          fontSize: '14px',
-          cursor: 'pointer',
-        }}
-      >
-        📄 ファイルを選択
-      </button>
-
       {isLoading && (
         <div style={{ marginTop: '16px', color: '#06C755', fontWeight: 'bold' }}>
-          ⚙️ WASMエンジンでSQLiteを読み込み中...
+          データベースを解析中...
         </div>
       )}
     </div>
