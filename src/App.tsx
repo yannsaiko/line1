@@ -14,9 +14,6 @@ export const App: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const fileArray = Array.from(files);
-      // DBファイルやテキストファイルの解析処理
-      // sqlite/txtパース処理をここで実行
       const rawChats: any[] = [];
       const rawUsers: any[] = [];
       const rawMessages: any[] = [];
@@ -43,7 +40,7 @@ export const App: React.FC = () => {
   return (
     <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
       <h1>LINE トーク履歴ビューアー</h1>
-      
+
       <FileUploader onFilesSelected={handleFilesSelect} isLoading={isLoading} />
 
       {errorMessage && (
