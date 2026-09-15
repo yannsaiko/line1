@@ -106,3 +106,5 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({ roomData }) => {
     </div>
   );
 };
+
+export default ChatRoom;
