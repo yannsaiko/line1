@@ -1,52 +1,38 @@
 /**
- * あらゆる形式のLINE日時データを正確な「HH:mm」に変換する
+ * 13桁Unixミリ秒・10桁Unix秒・iOS CoreData基準秒に対応した日時フォーマッタ
  */
-export const formatMessageTime = (dateInput: any): string => {
-  if (dateInput === null || dateInput === undefined || dateInput === '' || dateInput === 0) {
-    return '--:--';
-  }
+export const formatPrintDateTime = (rawTime: any): string => {
+  if (rawTime === undefined || rawTime === null || rawTime === '' || rawTime === 0) return '';
 
-  let num = typeof dateInput === 'string' ? Number(dateInput) : dateInput;
+  const num = typeof rawTime === 'string' ? Number(rawTime) : rawTime;
   let date: Date;
 
-  // 1. 数値（タイムスタンプ）の判定処理
   if (typeof num === 'number' && !isNaN(num)) {
-    // Unixミリ秒 (13桁: 例 1726383600000)
+    // 13桁Unixミリ秒 (例: 1726383600000)
     if (num > 1000000000000) {
       date = new Date(num);
-    }
-    // Unix秒 (10桁: 例 1726383600)
-    else if (num > 100000000) {
+    } 
+    // iOS CoreData / Cocoa 基準秒 (2001-01-01 経過秒)
+    else if (num > 100000000 && num < 1000000000) {
+      date = new Date(num * 1000 + 978307200000);
+    } 
+    // 10桁Unix秒 (例: 1726383600)
+    else if (num >= 1000000000 && num <= 10000000000) {
       date = new Date(num * 1000);
-    }
-    // iOS CoreData / Cocoa Epoch秒 (2001年1月1日からの経過秒数: 例 700000000 付近)
-    else if (num > 0 && num < 100000000) {
-      const COCOA_EPOCH_OFFSET = 978307200000; // 2001-01-01 UTC までのミリ秒
-      date = new Date(num * 1000 + COCOA_EPOCH_OFFSET);
     } 
     else {
-      return '--:--';
+      date = new Date(num);
     }
-  } 
-  // 2. 文字列（ISO 8601等）の処理
-  else if (typeof dateInput === 'string') {
-    const normalizedStr = dateInput.includes(' ') && !dateInput.includes('T')
-      ? dateInput.replace(' ', 'T')
-      : dateInput;
-    date = new Date(normalizedStr);
-  } 
-  else {
-    date = new Date(dateInput);
+  } else {
+    date = new Date(rawTime);
   }
 
-  // 無効な日付・1970年初期値ガード
-  if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
-    return '--:--';
-  }
+  if (isNaN(date.getTime()) || date.getFullYear() === 1970) return '';
 
-  return date.toLocaleTimeString('ja-JP', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+
+  return `${month}/${day} ${hours}:${minutes}`;
 };
