@@ -1,4 +1,6 @@
 export interface RawZUser {
+  Z_PK?: number;
+  z_pk?: number;
   ZMID?: string;
   zmid?: string;
   ZNAME?: string;
@@ -17,8 +19,6 @@ export interface RawZMessage {
   zcreatedtime?: number | string;
   ZSENDER?: string;
   zsender?: string;
-  ZSENDERHEADER?: string;
-  zsenderheader?: string;
   ZCHAT?: number | string;
   zchat?: number | string;
   [key: string]: any;
@@ -53,8 +53,12 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedChatRoom {
+  chatId: string | number;
   chatMid: string;
   roomTitle: string;
   partner: NormalizedUser | null;
   messages: NormalizedMessage[];
+  lastMessageText: string;
+  lastMessageTime: string;
+  lastTimestamp: number;
 }
