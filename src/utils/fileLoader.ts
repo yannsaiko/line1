@@ -1,4 +1,5 @@
-import initSqlJs from 'sql.js';
+// @ts-ignore
+import initSqlJs from 'sql.js/dist/sql-asm.js';
 import { RawZChat, RawZUser, RawZMessage } from '../types/lineDatabase';
 
 export interface ParsedLineRawData {
@@ -32,10 +33,8 @@ export const loadLineDataFromFile = async (file: File): Promise<ParsedLineRawDat
     };
   }
 
-  // unpkg CDN、または public フォルダ（'/'）を指定
-  const SQL = await initSqlJs({
-    locateFile: (file) => `https://unpkg.com/sql.js@1.12.0/dist/${file}`,
-  });
+  // locateFile 不要で動きます
+  const SQL = await initSqlJs();
 
   const arrayBuffer = await file.arrayBuffer();
   const db = new SQL.Database(new Uint8Array(arrayBuffer));
