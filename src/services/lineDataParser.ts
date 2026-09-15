@@ -92,3 +92,5 @@ export class LineDataParser {
     };
   }
 }
+
+export default LineDataParser;
