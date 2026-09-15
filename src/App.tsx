@@ -23,7 +23,7 @@ export const App: React.FC = () => {
       let rawMessages: any[] = [];
       let currentUserId = '0';
 
-      // SQLite DBファイルを優先検索 (.sqlite, .sqlite3, .db)
+      // SQLite DBファイルを検索
       const dbFile = fileArray.find(
         (f) =>
           f.name.endsWith('.sqlite') ||
@@ -33,8 +33,9 @@ export const App: React.FC = () => {
       );
 
       if (dbFile) {
+        // unpkg CDN から安定して WASM をロード
         const SQL = await initSqlJs({
-          locateFile: (file) => `https://sql.js.org/dist/${file}`,
+          locateFile: (file) => `https://unpkg.com/sql.js@1.8.0/dist/${file}`,
         });
         const buffer = await dbFile.arrayBuffer();
         const db = new SQL.Database(new Uint8Array(buffer));
@@ -111,7 +112,7 @@ export const App: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', backgroundColor: '#f5f6f8' }}>
-      {/* ヘッダーバー */}
+      {/* ヘッダー */}
       <header style={{ backgroundColor: '#06C755', color: '#fff', padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>LINE トーク履歴ビューアー</h1>
         <FileUploader onFilesSelected={handleFilesSelected} isLoading={isLoading} />
@@ -123,9 +124,9 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* メインコンテンツエリア (2カラムレイアウト) */}
+      {/* 2カラムレイアウト */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* 左側: サイドバー (トーク一覧) */}
+        {/* 左: サイドバー */}
         <aside style={{ width: '320px', borderRight: '1px solid #e0e0e0', backgroundColor: '#fff', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '12px', borderBottom: '1px solid #f0f0f0' }}>
             <input
@@ -154,7 +155,6 @@ export const App: React.FC = () => {
                       borderBottom: '1px solid #f5f5f5',
                       cursor: 'pointer',
                       backgroundColor: isSelected ? '#e8f7ed' : '#fff',
-                      transition: 'background-color 0.2s',
                     }}
                   >
                     <div style={{ fontWeight: 'bold', fontSize: '15px', color: '#333', marginBottom: '4px' }}>
@@ -170,16 +170,14 @@ export const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* 右側: メインチャット画面 */}
+        {/* 右: チャット画面 */}
         <main style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#7494C0' }}>
           {selectedRoom ? (
             <>
-              {/* トーク相手のヘッダー */}
               <div style={{ backgroundColor: '#fff', padding: '14px 20px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold', fontSize: '16px', color: '#333' }}>
                 {selectedRoom.roomTitle}
               </div>
 
-              {/* メッセージ表示エリア */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {selectedRoom.messages.length === 0 ? (
                   <div style={{ color: '#fff', textAlign: 'center', marginTop: '40px' }}>メッセージがありません</div>
@@ -193,7 +191,6 @@ export const App: React.FC = () => {
                         alignItems: msg.isMyMessage ? 'flex-end' : 'flex-start',
                       }}
                     >
-                      {/* 送信者名（相手の場合のみ表示） */}
                       {!msg.isMyMessage && (
                         <span style={{ fontSize: '12px', color: '#fff', marginBottom: '3px', marginLeft: '4px' }}>
                           {msg.senderName}
@@ -201,7 +198,6 @@ export const App: React.FC = () => {
                       )}
 
                       <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', flexDirection: msg.isMyMessage ? 'row-reverse' : 'row' }}>
-                        {/* メッセージフキダシ */}
                         <div
                           style={{
                             maxWidth: '65%',
@@ -219,7 +215,6 @@ export const App: React.FC = () => {
                           {msg.text}
                         </div>
 
-                        {/* 送信時刻 */}
                         <span style={{ fontSize: '11px', color: '#e0e0e0', flexShrink: 0 }}>
                           {msg.formattedTime}
                         </span>
