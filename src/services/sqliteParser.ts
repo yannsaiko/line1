@@ -9,18 +9,10 @@ export class SqliteParser {
     currentUserId: string
   ): NormalizedChatRoom {
     const rooms = LineDataParser.parseAllChatRooms([rawChat], rawUsers, rawMessages, currentUserId);
-    if (rooms.length > 0) {
-      return rooms[0];
-    }
-
-    const chatId = rawChat.Z_PK ?? rawChat.z_pk ?? rawChat.ZMID ?? rawChat.zmid ?? '0';
-    const chatMid = String(rawChat.ZMID || rawChat.zmid || '').trim();
-    const roomTitle = rawChat.ZNAME || rawChat.zname || 'トーク相手';
-
-    return {
-      chatId,
-      chatMid,
-      roomTitle,
+    return rooms[0] || {
+      chatId: '0',
+      chatMid: '',
+      roomTitle: 'トーク相手',
       partner: null,
       messages: [],
       lastMessageText: '',
