@@ -1,79 +1,71 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef } from 'react';
 
-export interface FileUploaderProps {
-  onFileSelect: (file: File) => void;
+interface FileUploaderProps {
+  onFilesSelected: (files: FileList | File[]) => void;
   isLoading?: boolean;
 }
 
-export const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect, isLoading }) => {
-  const [isDragOver, setIsDragOver] = useState(false);
+export const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelected, isLoading }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragOver(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFileSelect(e.dataTransfer.files[0]);
-    }
-  };
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onFileSelect(e.target.files[0]);
+      onFilesSelected(e.target.files);
     }
   };
 
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onClick={() => fileInputRef.current?.click()}
-      style={{
-        border: isDragOver ? '2px dashed #06C755' : '2px dashed #cccccc',
-        borderRadius: '12px',
-        padding: '36px 20px',
-        textAlign: 'center',
-        backgroundColor: isDragOver ? 'rgba(6, 199, 85, 0.05)' : '#ffffff',
-        cursor: 'pointer',
-        transition: 'all 0.2s ease',
-        margin: '20px auto',
-        maxWidth: '600px',
-      }}
-    >
+    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', margin: '16px 0' }}>
+      {/* 単一・複数ファイル選択ボタン */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept=".sqlite,.db,.json"
+        multiple
+        accept=".sqlite,.sqlite3,.db,.txt"
         style={{ display: 'none' }}
       />
-      <div style={{ fontSize: '44px', marginBottom: '8px' }}>📁</div>
-      <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#333333' }}>
-        LINEの SQLite DB（.sqlite / .db）または JSON をドロップ
-      </h3>
-      <p style={{ margin: 0, fontSize: '13px', color: '#666666' }}>
-        クリックしてファイルを選択
-      </p>
-      {isLoading && (
-        <div style={{ marginTop: '14px', color: '#06C755', fontWeight: 'bold' }}>
-          ⚙️ データベース解析中...
-        </div>
-      )}
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        disabled={isLoading}
+        style={{
+          padding: '10px 18px',
+          backgroundColor: '#06C755',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '6px',
+          cursor: 'pointer',
+          fontWeight: 'bold',
+        }}
+      >
+        ファイルを選択
+      </button>
+
+      {/* フォルダー丸ごと選択ボタン */}
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleFileChange}
+        {...({ webkitdirectory: '', directory: '' } as any)}
+        multiple
+        style={{ display: 'none' }}
+      />
+      <button
+        onClick={() => folderInputRef.current?.click()}
+        disabled={isLoading}
+        style={{
+          padding: '10px 18px',
+          backgroundColor: '#1E90FF',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '6px',
+          cursor: 'pointer',
+          fontWeight: 'bold',
+        }}
+      >
+        フォルダーを選択
+      </button>
     </div>
   );
 };
