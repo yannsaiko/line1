@@ -46,7 +46,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect, isLoad
       style={{
         border: isDragOver ? '2px dashed #06C755' : '2px dashed #cccccc',
         borderRadius: '12px',
-        padding: '40px 20px',
+        padding: '36px 20px',
         textAlign: 'center',
         backgroundColor: isDragOver ? 'rgba(6, 199, 85, 0.05)' : '#ffffff',
         cursor: 'pointer',
@@ -62,16 +62,16 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect, isLoad
         accept=".sqlite,.db,.json"
         style={{ display: 'none' }}
       />
-      <div style={{ fontSize: '48px', marginBottom: '12px' }}>📁</div>
-      <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', color: '#333333' }}>
-        Line.sqlite または JSON ファイルをドロップ
+      <div style={{ fontSize: '44px', marginBottom: '8px' }}>📁</div>
+      <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#333333' }}>
+        LINEの SQLite DB（.sqlite / .db）または JSON をドロップ
       </h3>
-      <p style={{ margin: 0, fontSize: '14px', color: '#666666' }}>
-        またはクリックしてファイルを選択してください
+      <p style={{ margin: 0, fontSize: '13px', color: '#666666' }}>
+        クリックしてファイルを選択
       </p>
       {isLoading && (
-        <div style={{ marginTop: '16px', color: '#06C755', fontWeight: 'bold' }}>
-          データベースを解析中...
+        <div style={{ marginTop: '14px', color: '#06C755', fontWeight: 'bold' }}>
+          ⚙️ データベース解析中...
         </div>
       )}
     </div>
