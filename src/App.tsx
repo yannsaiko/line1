@@ -10,7 +10,6 @@ export const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // 複数ファイル・フォルダーの統合解析処理
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -22,89 +21,87 @@ export const App: React.FC = () => {
       let rawMessages: any[] = [];
       let currentUserId = '0';
 
-      // 1. データベースファイル（.sqlite, .db 等）を全て抽出してマージ
       const dbFiles = fileArray.filter(
         (f) =>
           f.name.endsWith('.sqlite') ||
           f.name.endsWith('.sqlite3') ||
           f.name.endsWith('.db') ||
-          f.name.includes('Talk') ||
-          f.name.includes('Chat')
+          f.name.toLowerCase().includes('talk') ||
+          f.name.toLowerCase().includes('chat') ||
+          f.name.toLowerCase().includes('line')
       );
 
       if (dbFiles.length > 0) {
         try {
           // @ts-ignore
           const initSqlJs = (await import('sql.js')).default;
-          const SQL = await initSqlJs({
-            locateFile: () => '',
-          });
+          const SQL = await initSqlJs({ locateFile: () => '' });
 
           for (const dbFile of dbFiles) {
             try {
               const buffer = await dbFile.arrayBuffer();
               const db = new SQL.Database(new Uint8Array(buffer));
 
-              // ZCHAT
-              try {
-                const chatRes = db.exec('SELECT * FROM ZCHAT');
-                if (chatRes.length > 0) {
-                  const cols = chatRes[0].columns;
-                  const chats = chatRes[0].values.map((row) =>
-                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-                  );
-                  rawChats.push(...chats);
-                }
-              } catch (e) {}
+              // データベース内の全テーブル名を自動取得
+              const tablesRes = db.exec("SELECT name FROM sqlite_master WHERE type='table';");
+              const tables = tablesRes.length > 0 ? tablesRes[0].values.map(v => String(v[0])) : [];
 
-              // ZUSER
-              try {
-                const userRes = db.exec('SELECT * FROM ZUSER');
-                if (userRes.length > 0) {
-                  const cols = userRes[0].columns;
-                  const users = userRes[0].values.map((row) =>
-                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-                  );
-                  rawUsers.push(...users);
+              // チャットテーブルの検索と取得
+              const chatTable = tables.find(t => t.toLowerCase().includes('chat') || t.toLowerCase().includes('room'));
+              if (chatTable) {
+                const res = db.exec(`SELECT * FROM "${chatTable}"`);
+                if (res.length > 0) {
+                  const cols = res[0].columns;
+                  const rows = res[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+                  rawChats.push(...rows);
                 }
-              } catch (e) {}
+              }
 
-              // ZMESSAGE
-              try {
-                const msgRes = db.exec('SELECT * FROM ZMESSAGE');
-                if (msgRes.length > 0) {
-                  const cols = msgRes[0].columns;
-                  const msgs = msgRes[0].values.map((row) =>
-                    Object.fromEntries(cols.map((col, i) => [col, row[i]]))
-                  );
-                  rawMessages.push(...msgs);
+              // ユーザーテーブルの検索と取得
+              const userTable = tables.find(t => t.toLowerCase().includes('user') || t.toLowerCase().includes('contact') || t.toLowerCase().includes('friend'));
+              if (userTable) {
+                const res = db.exec(`SELECT * FROM "${userTable}"`);
+                if (res.length > 0) {
+                  const cols = res[0].columns;
+                  const rows = res[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+                  rawUsers.push(...rows);
                 }
-              } catch (e) {}
+              }
+
+              // メッセージテーブルの検索と取得
+              const msgTable = tables.find(t => t.toLowerCase().includes('message') || t.toLowerCase().includes('msg') || t.toLowerCase().includes('chatlog'));
+              if (msgTable) {
+                const res = db.exec(`SELECT * FROM "${msgTable}"`);
+                if (res.length > 0) {
+                  const cols = res[0].columns;
+                  const rows = res[0].values.map(row => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+                  rawMessages.push(...rows);
+                }
+              }
 
               db.close();
             } catch (dbErr) {
-              console.warn(`Failed to parse DB: ${dbFile.name}`, dbErr);
+              console.warn(`Error processing DB ${dbFile.name}:`, dbErr);
             }
           }
         } catch (wasmErr) {
-          console.warn('SQLite initialization skipped, falling back to text parsers', wasmErr);
+          console.warn('SQLite init error:', wasmErr);
         }
       }
 
-      // 2. テキストファイル（.txt）が複数ある場合も全て読み込んで統合
+      // テキストファイルの解析
       const txtFiles = fileArray.filter((f) => f.name.endsWith('.txt'));
       for (const txtFile of txtFiles) {
         try {
           const text = await txtFile.text();
           const lines = text.split('\n');
           const roomTitle = txtFile.name.replace(/\.[^/.]+$/, '');
-          
           let fileMessages: any[] = [];
           lines.forEach((line, idx) => {
             const parts = line.split('\t');
             if (parts.length >= 3) {
               fileMessages.push({
-                Z_PK: `txt_${txtFile.name}_${idx}`,
+                Z_PK: `txt_${idx}`,
                 ZTEXT: parts[2],
                 ZSENDER: parts[1],
                 ZCREATEDTIME: Date.parse(parts[0]) || Date.now(),
@@ -113,14 +110,11 @@ export const App: React.FC = () => {
               fileMessages[fileMessages.length - 1].ZTEXT += '\n' + line;
             }
           });
-
           if (fileMessages.length > 0) {
             rawChats.push({ Z_PK: roomTitle, ZNAME: roomTitle });
             rawMessages.push(...fileMessages);
           }
-        } catch (txtErr) {
-          console.warn(`Failed to parse text file: ${txtFile.name}`, txtErr);
-        }
+        } catch (e) {}
       }
 
       const parsedRooms = LineDataParser.parseAllChatRooms(
@@ -131,14 +125,14 @@ export const App: React.FC = () => {
       );
 
       if (parsedRooms.length === 0) {
-        throw new Error('選択されたファイルから有効なトーク履歴が見つかりませんでした。');
+        throw new Error('有効なトーク履歴データが見つかりませんでした。');
       }
 
       setChatRooms(parsedRooms);
       setSelectedRoom(parsedRooms[0]);
     } catch (err: any) {
       console.error(err);
-      setErrorMessage(err.message || 'ファイルの読み込み・解析に失敗しました。');
+      setErrorMessage(err.message || 'ファイルの読み込みに失敗しました。');
     } finally {
       setIsLoading(false);
     }
