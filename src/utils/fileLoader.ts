@@ -32,8 +32,9 @@ export const loadLineDataFromFile = async (file: File): Promise<ParsedLineRawDat
     };
   }
 
+  // unpkg CDN、または public フォルダ（'/'）を指定
   const SQL = await initSqlJs({
-    locateFile: (f) => `https://sql.js.org/dist/${f}`,
+    locateFile: (file) => `https://unpkg.com/sql.js@1.12.0/dist/${file}`,
   });
 
   const arrayBuffer = await file.arrayBuffer();
