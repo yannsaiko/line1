@@ -32,8 +32,9 @@ export const loadLineDataFromFile = async (file: File): Promise<ParsedLineRawDat
     };
   }
 
+  // CORS対応の unpkg CDN から wasm を読み込むように修正
   const SQL = await initSqlJs({
-    locateFile: (f) => `https://sql.js.org/dist/${f}`,
+    locateFile: (file) => `https://unpkg.com/sql.js@1.8.0/dist/${file}`,
   });
 
   const arrayBuffer = await file.arrayBuffer();
