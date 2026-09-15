@@ -53,12 +53,12 @@ export interface NormalizedMessage {
 }
 
 export interface NormalizedChatRoom {
-  chatId: string | number;
+  chatId?: string | number;
   chatMid: string;
   roomTitle: string;
   partner: NormalizedUser | null;
   messages: NormalizedMessage[];
-  lastMessageText: string;
-  lastMessageTime: string;
-  lastTimestamp: number;
+  lastMessageText?: string;
+  lastMessageTime?: string;
+  lastTimestamp?: number;
 }
