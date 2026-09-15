@@ -37,50 +37,96 @@ export const App: React.FC = () => {
     window.print();
   };
 
-  // LINE公式テキスト形式の解析
+  // 究極の超柔軟テキスト解析（iOS / Android / PC / 各種記述フォーマットに対応）
   const parseLineTxt = (text: string, fileName: string): NormalizedChatRoom | null => {
     const lines = text.split(/\r?\n/);
-    let roomTitle = fileName.replace(/\.[^/.]+$/, '').replace(/^\[LINE\]\s*/, '').replace(/とのトーク履歴$/, '');
+    let roomTitle = fileName
+      .replace(/\.[^/.]+$/, '')
+      .replace(/^\[LINE\]\s*/, '')
+      .replace(/とのトーク履歴$/, '');
+
     const messages: NormalizedMessage[] = [];
     let currentDate = '';
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (line.startsWith('[LINE]')) {
-        const match = line.match(/\[LINE\]\s*(.+)とのトーク履歴/);
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // タイトル行検出
+      if (trimmed.startsWith('[LINE]')) {
+        const match = trimmed.match(/\[LINE\]\s*(.+)とのトーク履歴/);
         if (match) roomTitle = match[1];
         continue;
       }
-      if (/^\d{4}[\/\.-]\d{1,2}[\/\.-]\d{1,2}/.test(line.trim())) {
-        currentDate = line.trim();
+
+      // ヘッダー除外
+      if (trimmed.startsWith('保存日時：') || trimmed.startsWith('保存日時:')) continue;
+
+      // 日付行 (例: 2023/10/24(火), 2023.10.24, 2023年10月24日)
+      if (/^\d{4}[\/\.\-年]\d{1,2}[\/\.\-月]\d{1,2}/.test(trimmed)) {
+        currentDate = trimmed;
         continue;
       }
 
-      const parts = line.split('\t');
-      if (parts.length >= 3) {
+      // 1) タブ区切り判定 (\t)
+      const tabParts = line.split('\t');
+      if (tabParts.length >= 3) {
         messages.push({
           id: `txt_${fileName}_${i}`,
-          text: parts[2],
-          senderMid: parts[1],
-          senderName: parts[1],
+          text: tabParts.slice(2).join('\t'),
+          senderMid: tabParts[1],
+          senderName: tabParts[1],
           timestamp: i,
-          formattedTime: parts[0],
+          formattedTime: tabParts[0],
           formattedFullDate: currentDate,
-          isMyMessage: parts[1] === '自分' || parts[1] === 'Me',
+          isMyMessage: tabParts[1] === '自分' || tabParts[1] === 'Me',
         });
-      } else if (parts.length === 2) {
+        continue;
+      } else if (tabParts.length === 2) {
         messages.push({
           id: `txt_${fileName}_${i}`,
-          text: parts[1],
-          senderMid: parts[0],
-          senderName: parts[0],
+          text: tabParts[1],
+          senderMid: tabParts[0],
+          senderName: tabParts[0],
           timestamp: i,
           formattedTime: '',
           formattedFullDate: currentDate,
-          isMyMessage: parts[0] === '自分' || parts[0] === 'Me',
+          isMyMessage: tabParts[0] === '自分' || tabParts[0] === 'Me',
         });
-      } else if (line.trim() !== '' && messages.length > 0) {
+        continue;
+      }
+
+      // 2) 複数スペースまたはコロン区切り判定 (Android/他フォーマット)
+      const spaceParts = line.split(/\s{2,}/);
+      if (spaceParts.length >= 3) {
+        messages.push({
+          id: `txt_${fileName}_${i}`,
+          text: spaceParts.slice(2).join(' '),
+          senderMid: spaceParts[1],
+          senderName: spaceParts[1],
+          timestamp: i,
+          formattedTime: spaceParts[0],
+          formattedFullDate: currentDate,
+          isMyMessage: spaceParts[1] === '自分' || spaceParts[1] === 'Me',
+        });
+        continue;
+      }
+
+      // 3) 複数行メッセージの結合または標準テキスト行としての救済
+      if (messages.length > 0) {
         messages[messages.length - 1].text += '\n' + line;
+      } else {
+        messages.push({
+          id: `txt_${fileName}_${i}`,
+          text: line,
+          senderMid: '送信者',
+          senderName: '送信者',
+          timestamp: i,
+          formattedTime: '',
+          formattedFullDate: currentDate,
+          isMyMessage: false,
+        });
       }
     }
 
@@ -98,7 +144,7 @@ export const App: React.FC = () => {
     };
   };
 
-  // ファイル解析
+  // ファイル読み込み・全自動フォールバック処理
   const handleFilesSelected = async (files: FileList | File[]) => {
     setIsLoading(true);
     setErrorMessage(null);
@@ -107,38 +153,25 @@ export const App: React.FC = () => {
       const fileArray = Array.from(files);
       const parsedRooms: NormalizedChatRoom[] = [];
 
-      // 1. テキストファイル（LINE公式書き出し）の読み込み
-      const txtFiles = fileArray.filter((f) => f.name.endsWith('.txt'));
-      for (const txtFile of txtFiles) {
-        try {
-          const text = await txtFile.text();
-          const room = parseLineTxt(text, txtFile.name);
-          if (room) parsedRooms.push(room);
-        } catch (e) {
-          console.warn('TXT parse error', e);
-        }
-      }
+      for (const file of fileArray) {
+        let parsed = false;
 
-      // 2. SQLiteデータベースファイルの読み込み
-      const dbFiles = fileArray.filter(
-        (f) =>
-          f.name.endsWith('.sqlite') ||
-          f.name.endsWith('.sqlite3') ||
-          f.name.endsWith('.db') ||
-          f.name.toLowerCase().includes('talk') ||
-          f.name.toLowerCase().includes('chat')
-      );
+        // 1. SQLiteとしての解析を試行
+        if (
+          file.name.endsWith('.sqlite') ||
+          file.name.endsWith('.sqlite3') ||
+          file.name.endsWith('.db') ||
+          file.name.toLowerCase().includes('talk') ||
+          file.name.toLowerCase().includes('chat')
+        ) {
+          try {
+            // @ts-ignore
+            const initSqlJs = (await import('sql.js')).default;
+            const SQL = await initSqlJs({
+              locateFile: (f: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${f}`,
+            });
 
-      if (dbFiles.length > 0) {
-        try {
-          // @ts-ignore
-          const initSqlJs = (await import('sql.js')).default;
-          const SQL = await initSqlJs({
-            locateFile: (file: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`,
-          });
-
-          for (const dbFile of dbFiles) {
-            const buffer = await dbFile.arrayBuffer();
+            const buffer = await file.arrayBuffer();
             const db = new SQL.Database(new Uint8Array(buffer));
             const tablesRes = db.exec("SELECT name FROM sqlite_master WHERE type='table';");
             const tables = tablesRes.length > 0 ? tablesRes[0].values.map((v) => String(v[0])) : [];
@@ -162,26 +195,40 @@ export const App: React.FC = () => {
                 }));
 
                 parsedRooms.push({
-                  chatId: dbFile.name,
-                  chatMid: dbFile.name,
-                  roomTitle: dbFile.name.replace(/\.[^/.]+$/, ''),
+                  chatId: file.name,
+                  chatMid: file.name,
+                  roomTitle: file.name.replace(/\.[^/.]+$/, ''),
                   partner: null,
                   messages: msgs,
                   lastMessageText: msgs[msgs.length - 1]?.text || '',
                   lastMessageTime: '',
                   lastTimestamp: msgs.length,
                 });
+                parsed = true;
               }
             }
             db.close();
+          } catch (dbErr) {
+            console.warn('DB解析スキップ、テキストモードへフォールバック:', dbErr);
           }
-        } catch (dbErr) {
-          console.warn('SQLite init error', dbErr);
+        }
+
+        // 2. テキストパーサーによる救済（DB解析非対象、またはDB解析失敗時）
+        if (!parsed) {
+          try {
+            const text = await file.text();
+            const room = parseLineTxt(text, file.name);
+            if (room) {
+              parsedRooms.push(room);
+            }
+          } catch (txtErr) {
+            console.warn('テキスト解析エラー:', txtErr);
+          }
         }
       }
 
       if (parsedRooms.length === 0) {
-        throw new Error('有効なトーク履歴データが見つかりませんでした。LINEアプリから「トーク履歴を送信」で保存した.txtファイル、またはLINE DBファイルを選択してください。');
+        throw new Error('ファイルを読み込めませんでした。文字が入っているテキストファイルを選択してください。');
       }
 
       setChatRooms(parsedRooms);
@@ -239,7 +286,7 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }} className="print-container">
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* サイドバー */}
         <aside className="no-print" style={{ width: '320px', borderRight: '1px solid #e0e0e0', backgroundColor: '#fff', display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '12px', borderBottom: '1px solid #f0f0f0' }}>
@@ -291,7 +338,7 @@ export const App: React.FC = () => {
               <div style={{ backgroundColor: '#fff', padding: '14px 20px', borderBottom: '1px solid #e0e0e0', fontWeight: 'bold', fontSize: '16px', color: '#333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>{selectedRoom.roomTitle}</span>
                 <span className="no-print" style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
-                  ※各吹き出しの「モザイク」「削除」で編集できます
+                  ※各吹き出しの「モザイク」「削除」で個別編集できます
                 </span>
               </div>
 
@@ -350,11 +397,10 @@ export const App: React.FC = () => {
                               {msg.formattedTime}
                             </span>
 
-                            {/* 操作ボタン（モザイク・削除） */}
+                            {/* 操作ボタン */}
                             <div className="no-print action-btn" style={{ display: 'flex', gap: '4px' }}>
                               <button
                                 onClick={() => toggleBlur(msg.id)}
-                                title="モザイクの切替"
                                 style={{
                                   padding: '2px 6px',
                                   fontSize: '10px',
@@ -369,7 +415,6 @@ export const App: React.FC = () => {
                               </button>
                               <button
                                 onClick={() => deleteMessage(msg.id)}
-                                title="このメッセージを非表示"
                                 style={{
                                   padding: '2px 6px',
                                   fontSize: '10px',
