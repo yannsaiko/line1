@@ -3,10 +3,8 @@ import { LineDataParser } from './services/lineDataParser';
 import { ChatRoom } from './components/ChatRoom';
 
 export const App = () => {
-  // 自分の ZMID (ログインユーザーID)
   const currentUserId = "u1000000000000000000000000000001";
 
-  // SQLiteから抽出した生のテーブルデータ例
   const rawZChat = { ZMID: "u2000000000000000000000000000002", ZNAME: "" };
 
   const rawZUsers = [
@@ -19,17 +17,16 @@ export const App = () => {
       Z_PK: 101,
       ZSENDER: "u2000000000000000000000000000002",
       ZTEXT: "お疲れ様です。明日のミーティングの件です。",
-      ZCREATEDTIME: 748161000 // iOS CoreData Epoch基準秒 (2024/09/15 15:30)
+      ZCREATEDTIME: 748161000
     },
     {
       Z_PK: 102,
       ZSENDER: "u1000000000000000000000000000001",
       ZTEXT: "了解いたしました！14時に参加いたします。",
-      ZCREATEDTIME: 1726383060000 // 13桁 Unixミリ秒
+      ZCREATEDTIME: 1726383060000
     }
   ];
 
-  // 生データを一括解析・統合
   const parsedRoom = useMemo(() => {
     return LineDataParser.parseChatRoom(rawZChat, rawZUsers, rawZMessages, currentUserId);
   }, [rawZChat, rawZUsers, rawZMessages, currentUserId]);
