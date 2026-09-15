@@ -33,9 +33,9 @@ export const App: React.FC = () => {
       );
 
       if (dbFile) {
-        // unpkg CDN から安定して WASM をロード
+        // 自サーバー（publicディレクトリ）から WASM を読み込む
         const SQL = await initSqlJs({
-          locateFile: (file) => `https://unpkg.com/sql.js@1.8.0/dist/${file}`,
+          locateFile: (file) => `${process.env.PUBLIC_URL || ''}/${file}`,
         });
         const buffer = await dbFile.arrayBuffer();
         const db = new SQL.Database(new Uint8Array(buffer));
